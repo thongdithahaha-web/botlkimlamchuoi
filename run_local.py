@@ -414,52 +414,82 @@ def human_sleep(min_sec: float, max_sec: float):
 
 
 def send_chain_messages(page, username: str, hub: RemoteHubSync) -> bool:
-    """Gửi lần lượt 10 tin nhắn trong chuỗi vào DraftEditor của TikTok."""
+    """Gửi lần lượt các tin nhắn trong chuỗi vào DraftEditor của TikTok."""
     total_msgs = len(REPLY_CHAIN)
-    log.info(f"[Gui tin] Bat dau gui chuoi {total_msgs} tin cho: {username}")
-    hub.add_log(f"Bat dau gui chuoi {total_msgs} tin cho @{username}")
+    log.info(f"[Gửi tin] Bắt đầu gửi chuỗi {total_msgs} tin cho: {username}")
+    hub.add_log(f"Bắt đầu gửi chuỗi {total_msgs} tin cho @{username}")
 
     editor_selectors = [
         "div.public-DraftEditor-content",
         'div[contenteditable="true"]',
         '[data-e2e="dm-new-chatbox"] [contenteditable="true"]',
+        '[data-e2e="chat-input-textarea"]',
+        'div[data-slate-editor="true"]',
     ]
 
-    editor = None
+    active_editor = None
     for sel in editor_selectors:
         try:
-            editor = page.wait_for_selector(sel, timeout=6000)
-            if editor:
+            loc = page.locator(sel).first
+            if loc.is_visible(timeout=2500):
+                active_editor = loc
                 break
         except Exception:
             continue
 
-    if not editor:
-        log.error(f"[Loi] Khong tim thay khung soan thao tin nhan cho {username}")
-        hub.add_log(f"Loi: Khong tim thay khung chat cua @{username}")
+    if not active_editor:
+        log.error(f"[Lỗi] Không tìm thấy khung soạn thảo tin nhắn cho @{username}")
+        hub.add_log(f"Lỗi: Không tìm thấy khung chat của @{username}")
         return False
 
+    # Focus vào khung soạn thảo trước khi bắt đầu gửi
+    try:
+        active_editor.click(timeout=3000)
+        human_sleep(0.2, 0.4)
+    except Exception as e:
+        log.warning(f"Lỗi focus khung chat: {e}")
+
+    sent_count = 0
     for idx, msg in enumerate(REPLY_CHAIN, start=1):
         log.info(f"   -> [{idx}/{total_msgs}] {msg}")
         hub.add_log(f"Gui [{idx}/{total_msgs}] toi @{username}: {msg[:25]}")
         try:
-            editor.click()
-            human_sleep(0.1, 0.2)
-            # Nếu là emoji thì dùng insert_text để gửi nhanh và tránh lỗi mã hóa
+            # Click nhẹ vào khung soạn thảo để đảm bảo con trỏ đang ở đúng chỗ
+            try:
+                active_editor.click(timeout=1000)
+            except Exception:
+                pass
+            human_sleep(0.08, 0.15)
+
+            # Nếu là emoji thì dùng insert_text để gửi nhanh và tránh lỗi mã hóa ký tự
             if any(ord(c) > 0xFFFF for c in msg):
                 page.keyboard.insert_text(msg)
             else:
                 page.keyboard.type(msg, delay=random.randint(10, 25))
-            human_sleep(0.1, 0.2)
+            human_sleep(0.08, 0.15)
+            
             page.keyboard.press("Enter")
+
+            # Dự phòng: Bấm nút gửi nếu giao diện hiển thị nút gửi riêng
+            try:
+                send_btn = page.locator('[data-e2e="message-send-btn"], [aria-label*="Gửi" i], [aria-label*="Send" i]').first
+                if send_btn.is_visible(timeout=300):
+                    send_btn.click(timeout=800)
+            except Exception:
+                pass
+
+            sent_count += 1
             human_sleep(*CHAIN_DELAY_RANGE)
         except Exception as err:
-            log.error(f"   [Canh bao] Loi khi gui tin thu {idx}: {err}")
-            return False
+            log.warning(f"   [Cảnh báo] Lỗi khi gửi tin thứ {idx} cho @{username}: {err}")
+            human_sleep(0.3, 0.6)
+            continue
 
-    log.info(f"   [Thanh cong] Da gui tron ven chuoi {total_msgs} tin nhan cho: {username}")
-    hub.add_log(f"Hoan tat chuoi {total_msgs} tin nhan cho @{username}")
-    return True
+    if sent_count > 0:
+        log.info(f"   [Thành công] Đã gửi thành công {sent_count}/{total_msgs} tin nhắn cho: {username}")
+        hub.add_log(f"Hoàn tất chuỗi tin cho @{username}")
+        return True
+    return False
 
 
 def find_next_pending_user(page, active_cooldowns: list) -> dict:
@@ -670,7 +700,7 @@ def detect_and_wait_for_manual_captcha(page, context=None, cookie_file=None, is_
     return False
 
 
-def is_chat_editor_ready(page, timeout: int = 4000) -> bool:
+def wait_for_chat_editor(page, timeout: int = 4000) -> bool:
     """Kiểm tra xem khung soạn thảo tin nhắn TikTok đã sẵn sàng nhận văn bản chưa."""
     editor_selectors = [
         "div.public-DraftEditor-content",
@@ -679,22 +709,27 @@ def is_chat_editor_ready(page, timeout: int = 4000) -> bool:
         '[data-e2e="chat-input-textarea"]',
         'div[data-slate-editor="true"]',
     ]
-    for sel in editor_selectors:
-        try:
-            loc = page.locator(sel).first
-            if loc.is_visible(timeout=timeout):
-                return True
-        except Exception:
-            pass
+    start_t = time.time()
+    while (time.time() - start_t) * 1000 < timeout:
+        for sel in editor_selectors:
+            try:
+                if page.locator(sel).first.is_visible(timeout=250):
+                    return True
+            except Exception:
+                pass
+        time.sleep(0.15)
     return False
+
+# Giữ alias cho tương thích ngược
+is_chat_editor_ready = wait_for_chat_editor
 
 
 def open_conversation_with_user(page, username: str, context=None, cookie_file=None, is_headless: bool = False) -> bool:
     """
     Tìm và mở hội thoại với @username bằng 3 phương pháp liên hoàn siêu tốc:
-    1. Quét ngay trong danh sách hội thoại trên /messages (dùng evaluate JavaScript cực nhanh ~0.05s).
-    2. Gõ tìm kiếm vào ô tìm kiếm tin nhắn trên /messages (nhanh ~0.8s, không rời trang).
-    3. (Dự phòng) Truy cập trang cá nhân nếu 2 cách trên không tìm thấy.
+    1. Quét ngay trong danh sách hội thoại trên /messages bằng Playwright locator chuẩn.
+    2. Gõ tìm kiếm vào ô tìm kiếm tin nhắn trên /messages (nhanh, không rời trang).
+    3. (Dự phòng) Truy cập trang cá nhân nếu 2 cách trên không tìm thấy. Bấm nút Tin nhắn an toàn chống crash.
     """
     clean_u = username.strip().lstrip("@")
 
@@ -706,118 +741,122 @@ def open_conversation_with_user(page, username: str, context=None, cookie_file=N
         except Exception:
             pass
 
-    # ── CÁCH 1: QUÉT TRONG DANH SÁCH HỘI THOẠI CỦA /messages BẰNG JAVASCRIPT (Siêu tốc 0.05s) ──
+    # ── CÁCH 1: KIỂM TRA TRONG DANH SÁCH HỘI THOẠI ĐANG MỞ TRÊN /messages ──
     try:
-        found_in_list = page.evaluate("""(u) => {
-            const clean = u.toLowerCase();
-            const items = document.querySelectorAll('[data-e2e="dm-new-conversation-item"], [data-e2e="chat-list-item"], div[role="listitem"]');
-            for (const item of items) {
-                const text = (item.innerText || '').toLowerCase();
-                if (text.includes(clean)) {
-                    item.click();
-                    return true;
-                }
-            }
-            return false;
-        }""", clean_u)
-        if found_in_list:
-            human_sleep(0.4, 0.7)
-            if is_chat_editor_ready(page, timeout=2000):
-                log.info(f"   -> [Cách 1] Đã mở cuộc trò chuyện có sẵn với @{clean_u} (Siêu tốc)")
+        user_item = page.locator(
+            f'[data-e2e="dm-new-conversation-item"]:has-text("{clean_u}"), '
+            f'[data-e2e="chat-list-item"]:has-text("{clean_u}"), '
+            f'div[role="listitem"]:has-text("{clean_u}")'
+        ).first
+        if user_item.is_visible(timeout=800):
+            user_item.click(timeout=3000)
+            human_sleep(0.5, 0.8)
+            if wait_for_chat_editor(page, timeout=3000):
+                log.info(f"   -> [Cách 1] Đã mở cuộc trò chuyện có sẵn với @{clean_u}!")
                 return True
-    except Exception:
-        pass
+    except Exception as e1:
+        log.debug(f"Cách 1: {e1}")
 
-    # ── CÁCH 2: TÌM QUA THANH TÌM KIẾM TIN NHẮN TRÊN /messages (Không rời trang, không dính CAPTCHA) ──
+    # ── CÁCH 2: TÌM QUA THANH TÌM KIẾM TIN NHẮN TRÊN /messages (Không rời trang) ──
     try:
-        search_inputs = page.locator(
-            'input[data-e2e="search-user-input"], '
-            'input[data-e2e="im-search-input"], '
-            'input[placeholder*="Tìm" i], '
-            'input[placeholder*="Search" i], '
-            'input[type="search"]'
-        )
-        if search_inputs.count() > 0:
-            s_box = search_inputs.first
-            s_box.click()
+        search_inputs = [
+            'input[data-e2e="search-user-input"]',
+            'input[data-e2e="im-search-input"]',
+            'input[data-e2e="chat-search-input"]',
+            'input[placeholder*="Tìm" i]',
+            'input[placeholder*="Search" i]',
+            'input[type="search"]',
+        ]
+        s_box = None
+        for s_sel in search_inputs:
+            try:
+                loc = page.locator(s_sel).first
+                if loc.is_visible(timeout=400):
+                    s_box = loc
+                    break
+            except Exception:
+                continue
+
+        if s_box:
+            s_box.click(timeout=1500)
             s_box.fill("")
-            s_box.fill(clean_u)
-            human_sleep(0.5, 0.8)
-            page.keyboard.press("Enter")
-            human_sleep(0.5, 0.8)
+            s_box.type(clean_u, delay=35)
+            human_sleep(1.2, 1.8)  # Chờ API tìm kiếm TikTok trả kết quả
 
-            clicked = page.evaluate("""(u) => {
-                const clean = u.toLowerCase();
-                const results = document.querySelectorAll('[data-e2e="search-user-item"], [data-e2e="im-search-user-item"], [data-e2e="dm-new-conversation-item"], [class*="SearchUser"], [class*="UserItem"], div[role="option"]');
-                for (const r of results) {
-                    const text = (r.innerText || '').toLowerCase();
-                    if (text.includes(clean)) {
-                        r.click();
-                        return true;
-                    }
-                }
-                if (results.length > 0) {
-                    results[0].click();
-                    return true;
-                }
-                return false;
-            }""", clean_u)
-
-            if clicked:
-                human_sleep(0.6, 1.0)
-                if is_chat_editor_ready(page, timeout=3000):
-                    log.info(f"   -> [Cách 2] Tìm thấy và mở hội thoại với @{clean_u} qua ô tìm kiếm!")
-                    return True
-    except Exception:
-        pass
+            result_candidates = [
+                f'[data-e2e="search-user-item"]:has-text("{clean_u}")',
+                f'[data-e2e="im-search-user-item"]:has-text("{clean_u}")',
+                f'div[role="option"]:has-text("{clean_u}")',
+                f'li:has-text("{clean_u}")',
+                f'div[class*="SearchUser"]:has-text("{clean_u}")',
+                '[data-e2e="search-user-item"]',
+                '[data-e2e="im-search-user-item"]',
+                'div[role="option"]',
+            ]
+            for r_sel in result_candidates:
+                try:
+                    r_loc = page.locator(r_sel).first
+                    if r_loc.is_visible(timeout=600):
+                        r_loc.click(timeout=2500)
+                        human_sleep(0.6, 1.0)
+                        if wait_for_chat_editor(page, timeout=4000):
+                            log.info(f"   -> [Cách 2] Tìm thấy và mở hội thoại với @{clean_u} qua ô tìm kiếm!")
+                            return True
+                        break
+                except Exception:
+                    continue
+    except Exception as e2:
+        log.debug(f"Cách 2: {e2}")
 
     # ── CÁCH 3: TRUY CẬP TRỰC TIẾP TRANG CÁ NHÂN https://www.tiktok.com/@username ──
     try:
         profile_url = f"https://www.tiktok.com/@{clean_u}"
         log.info(f"   -> [Cách 3] Vào trang cá nhân của bạn bè: {profile_url}")
-        page.goto(profile_url, timeout=30000, wait_until="domcontentloaded")
+        try:
+            page.goto(profile_url, timeout=30000, wait_until="domcontentloaded")
+        except Exception as goto_err:
+            log.warning(f"   [Cảnh báo tải trang cá nhân]: {goto_err}")
         human_sleep(1.5, 2.5)
 
         # Kiểm tra nếu có CAPTCHA
         detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
 
-        # Chờ header profile tải xong (chứa các nút Follow / Tin nhắn)
+        # Chờ header profile tải xong
         try:
             page.wait_for_selector(
-                'button, a[href*="/messages"], [data-e2e="message-button"], [role="button"]',
+                'main, [data-e2e="user-profile-header"], div[class*="Header"], div[class*="UserProfile"]',
                 timeout=6000
             )
         except Exception:
             pass
 
-        # Toàn bộ danh sách nhận diện nút "Tin nhắn" trên TikTok Web (Đa ngôn ngữ & cấu trúc DOM)
-        msg_button_selectors = [
-            # 1. Selector chuẩn thuộc tính data-e2e
+        # Danh sách selector chuẩn chỉ quét trong nội dung profile (main/header), TUYỆT ĐỐI không bấm nhầm menu sidebar
+        profile_msg_button_selectors = [
+            # 1. Selector thuộc tính chuẩn data-e2e
             '[data-e2e="message-button"]',
             '[data-e2e="user-message-btn"]',
             '[data-e2e="chat-button"]',
-            # 2. Text tiếng Việt chuẩn TikTok Web
-            'button:has-text("Tin nhắn")',
-            'button:has-text("Nhắn tin")',
-            'button:has-text("Gửi tin nhắn")',
-            # 3. Text tiếng Anh chuẩn TikTok Web
-            'button:has-text("Message")',
-            'button:has-text("Send message")',
-            'button:has-text("Direct message")',
-            # 4. Thẻ điều hướng sang /messages
-            'a[href*="/messages"]',
-            # 5. Role button (thẻ div hoặc span)
-            'div[role="button"]:has-text("Tin nhắn")',
-            'div[role="button"]:has-text("Nhắn tin")',
-            'div[role="button"]:has-text("Message")',
-            # 6. Aria-label thuộc tính trợ năng
-            '[aria-label*="Tin nhắn" i]',
-            '[aria-label*="Nhắn tin" i]',
-            '[aria-label*="Message" i]',
+            # 2. Button bên trong phần Header / Profile actions
+            '[data-e2e="user-profile-header"] button:has-text("Tin nhắn")',
+            '[data-e2e="user-profile-header"] button:has-text("Nhắn tin")',
+            '[data-e2e="user-profile-header"] button:has-text("Message")',
+            'main button:has-text("Tin nhắn")',
+            'main button:has-text("Nhắn tin")',
+            'main button:has-text("Message")',
+            'div[class*="Header"] button:has-text("Tin nhắn")',
+            'div[class*="Header"] button:has-text("Nhắn tin")',
+            'div[class*="Header"] button:has-text("Message")',
+            # 3. Thẻ role button bên trong main
+            'main div[role="button"]:has-text("Tin nhắn")',
+            'main div[role="button"]:has-text("Nhắn tin")',
+            'main div[role="button"]:has-text("Message")',
+            # 4. Thẻ a link bên trong header profile
+            '[data-e2e="user-profile-header"] a[href*="/messages"]',
+            'main a[href*="/messages"]',
         ]
 
         msg_btn = None
-        for sel in msg_button_selectors:
+        for sel in profile_msg_button_selectors:
             try:
                 btn_loc = page.locator(sel)
                 if btn_loc.count() > 0 and btn_loc.first.is_visible(timeout=800):
@@ -826,10 +865,14 @@ def open_conversation_with_user(page, username: str, context=None, cookie_file=N
             except Exception:
                 continue
 
-        # Phương án phụ: Tìm nút nằm cạnh nút Follow trong action bar
+        # Phương án phụ: Tìm nút nằm cạnh nút Bạn bè / Follow trong khu vực profile actions
         if not msg_btn:
             try:
-                action_btns = page.locator('[data-e2e="user-profile-actions"] button, [data-e2e="user-profile-header"] button')
+                action_btns = page.locator(
+                    '[data-e2e="user-profile-actions"] button, '
+                    '[data-e2e="user-profile-header"] button, '
+                    'div[class*="ShareHeader"] button'
+                )
                 for i in range(action_btns.count()):
                     b = action_btns.nth(i)
                     b_text = (b.text_content() or "").strip().lower()
@@ -842,22 +885,46 @@ def open_conversation_with_user(page, username: str, context=None, cookie_file=N
                 pass
 
         if msg_btn:
-            msg_btn.scroll_into_view_if_needed(timeout=2000)
-            human_sleep(0.3, 0.6)
-            msg_btn.click()
-            human_sleep(1.5, 2.5)
+            log.info(f"   -> [Cách 3] Đã tìm thấy nút Tin nhắn cho @{clean_u}, đang kích hoạt mở hộp thư...")
+            try:
+                msg_btn.scroll_into_view_if_needed(timeout=2000)
+            except Exception:
+                pass
+            human_sleep(0.3, 0.5)
 
-            if is_chat_editor_ready(page, timeout=5000):
-                log.info(f"   -> [Cách 3] Đã bấm nút Tin nhắn thành công trên trang cá nhân của @{clean_u}!")
+            # Bấm nút Tin nhắn an toàn, không để ngoại lệ navigation làm sập bot
+            try:
+                msg_btn.click(timeout=5000)
+            except Exception as click_err:
+                log.debug(f"Click trigger warning: {click_err}")
+
+            # Chờ TikTok chuyển hướng sang /messages an toàn (kể cả khi mở tab mới)
+            for _ in range(16):
+                human_sleep(0.3, 0.5)
+                try:
+                    if context and len(context.pages) > 1:
+                        for p in reversed(context.pages):
+                            if "tiktok.com/messages" in p.url.lower():
+                                p.bring_to_front()
+                                page = p
+                                break
+                    if "tiktok.com/messages" in page.url.lower():
+                        break
+                except Exception:
+                    pass
+
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=6000)
+            except Exception:
+                pass
+
+            if wait_for_chat_editor(page, timeout=8000):
+                log.info(f"   -> [Cách 3] Đã mở thành công hộp thư với @{clean_u}!")
                 return True
             else:
-                # Nếu TikTok điều hướng sang /messages sau khi bấm
-                if "tiktok.com/messages" in page.url.lower():
-                    if is_chat_editor_ready(page, timeout=5000):
-                        log.info(f"   -> [Cách 3] Đã chuyển tới hộp thư của @{clean_u}!")
-                        return True
+                log.warning(f"   -> [Cách 3] Đã bấm nút Tin nhắn nhưng khung chat chưa sẵn sàng.")
         else:
-            log.warning(f"   [Cảnh báo] Không tìm thấy nút Tin nhắn trên trang của @{clean_u} (Có thể do nick này chặn tin nhắn người lạ hoặc chưa kết bạn).")
+            log.warning(f"   [Cảnh báo] Không tìm thấy nút Tin nhắn trên trang của @{clean_u} (Nick chặn tin nhắn người lạ hoặc chưa kết bạn).")
 
     except Exception as e:
         log.warning(f"   [Lỗi khi mở chat với @{clean_u}]: {e}")
@@ -934,21 +1001,29 @@ def check_and_send_daily_streaks(page, hub: RemoteHubSync, quota_tracker: UserQu
         log.info(f"[Giữ chuỗi] Đang gửi chuỗi cho bạn bè: @{username}")
         hub.add_log(f"Đang gửi chuỗi lửa cho @{username}")
 
-        found = open_conversation_with_user(page, username, context=context, cookie_file=cookie_file, is_headless=is_headless)
-        if found:
-            success = send_chain_messages(page, username, hub)
-            if success:
-                quota_tracker.record_reply(username, "Giữ chuỗi lúc " + streak_time)
-                sent_today.append(username)
-                history[record_key] = sent_today
-                try:
-                    with open(STREAK_HISTORY_FILE, "w", encoding="utf-8") as f:
-                        json.dump(history, f, indent=2, ensure_ascii=False)
-                except Exception:
-                    pass
-                log.info(f"[{session_tag}] Đã thắp lửa chuỗi thành công cho @{username}!")
-                hub.add_log(f"[{session_tag}] Đã thắp lửa thành công cho @{username}")
-                human_sleep(1.0, 2.0)
+        try:
+            found = open_conversation_with_user(page, username, context=context, cookie_file=cookie_file, is_headless=is_headless)
+            if found:
+                success = send_chain_messages(page, username, hub)
+                if success:
+                    quota_tracker.record_reply(username, "Giữ chuỗi lúc " + streak_time)
+                    sent_today.append(username)
+                    history[record_key] = sent_today
+                    try:
+                        with open(STREAK_HISTORY_FILE, "w", encoding="utf-8") as f:
+                            json.dump(history, f, indent=2, ensure_ascii=False)
+                    except Exception:
+                        pass
+                    log.info(f"[{session_tag}] Đã thắp lửa chuỗi thành công cho @{username}!")
+                    hub.add_log(f"[{session_tag}] Đã thắp lửa thành công cho @{username}")
+                    human_sleep(1.0, 2.0)
+                else:
+                    log.warning(f"[{session_tag}] Không thể gửi trọn vẹn chuỗi tin cho @{username}")
+            else:
+                log.warning(f"[{session_tag}] Bỏ qua @{username} do không mở được hộp thư, tiếp tục tài khoản kế tiếp...")
+        except Exception as e_user:
+            log.error(f"[{session_tag}] Lỗi khi xử lý bạn bè @{username}: {e_user}")
+            human_sleep(1.0, 2.0)
 
     # Đưa lại về trang tin nhắn chính sau khi hoàn thành
     if not page.url.startswith("https://www.tiktok.com/messages"):
