@@ -277,15 +277,12 @@ def sub_flexible_session():
     if not sess_in:
         sess_in = "1 2"
 
-    print("\nchon che do van hanh:")
-    print("  [1] chu dong + rep lai 24/7 (vua truc rep nguoi la, vua cho dung gio hen chu dong gui ban be) [mac dinh]")
-    print("  [2] chi chu dong (chi cho dung gio hen moi gui targets.txt, tuyet doi khong rep nguoi la)")
-    print("  [3] chi rep lai 24/7 (chi tu rep tin nhan nguoi xem, khong gui danh sach targets)")
-    print("  [4] chu dong gui ngay (ban streak ngay lap tuc cho targets.txt roi dung)")
-    
-    m_choice = input("\n>> chon che do [1-4, mac dinh 1]: ").strip()
-    mode_map = {"1": "both", "2": "chudong", "3": "247", "4": "target"}
-    mode_flag = mode_map.get(m_choice, "both")
+    print("\nchon che do van hanh cho targets.txt:")
+    print("  [1] ban streak ngay lap tuc cho targets.txt roi xong [mac dinh]")
+    print("  [2] chay hen gio hang ngay (dung gio hen tu dong ban streak, khong rep nguoi la)")
+
+    m_choice = input("\n>> chon che do [1-2, mac dinh 1]: ").strip()
+    mode_flag = "target" if m_choice != "2" else "hen_gio"
 
     bg_in = input("\n>> chay ngam (tat man hinh van chay)? [y/n, mac dinh y]: ").strip().lower()
     in_bg = (bg_in != "n")
@@ -315,7 +312,7 @@ def sub_run_single(sess_num: int):
 def sub_run_background_default():
     clear_screen()
     print("========================================================================")
-    print("      khoi dong chay ngam 24/7 (chu dong + rep lai - khuyen dung)")
+    print("      khoi dong chay ngam hen gio giu chuoi targets.txt (khuyen dung)")
     print("========================================================================")
     cmd = "run_multi.py --sessions \"1 2\" --headless --mode hen_gio"
     execute_bot_command(cmd, in_background=True)

@@ -636,75 +636,128 @@ def load_targets() -> list:
             with open(TARGETS_FILE, "r", encoding="utf-8") as f:
                 for line in f:
                     u = line.strip().lstrip("@")
-                    if u and not u.startswith("#"):
+                    if u and not u.startswith("#") and u not in targets:
                         targets.append(u)
         except Exception:
             pass
     return targets
 
 
-def detect_and_wait_for_manual_captcha(page, context=None, cookie_file=None, is_headless: bool = False) -> bool:
-    """Kiểm tra nếu TikTok yêu cầu giải CAPTCHA thì tạm dừng để boss man kéo bằng tay."""
-    captcha_selectors = [
+def is_captcha_present(page) -> bool:
+    """Kiểm tra toàn diện tất cả các dấu hiệu CAPTCHA (hình ghép, xoay hình, 2 hình giống nhau) trên TikTok."""
+    try:
+        # 1. Quét nội dung văn bản và class trong DOM bằng JavaScript
+        found_js = page.evaluate("""() => {
+            const sels = [
+                '#captcha-verify-image', '.captcha_verify_container', '#tiktok-verify-ele',
+                '.sec-cpt-container', '[data-e2e="captcha-verify-container"]',
+                'div[class*="captcha_verify"]', 'div[class*="sec-cpt"]', 'div[class*="verify-container"]',
+                'div[class*="Captcha"]', 'div[id*="captcha"]'
+            ];
+            for (const s of sels) {
+                const el = document.querySelector(s);
+                if (el && (el.offsetWidth > 0 || el.offsetHeight > 0 || window.getComputedStyle(el).display !== 'none')) {
+                    return true;
+                }
+            }
+            const bodyText = document.body ? document.body.innerText : '';
+            if (bodyText.includes('Drag the slider') || 
+                bodyText.includes('fit the puzzle') || 
+                bodyText.includes('puzzle') || 
+                bodyText.includes('Kéo thanh trượt') ||
+                bodyText.includes('khớp hình ghép') ||
+                bodyText.includes('hình ghép') ||
+                bodyText.includes('Chọn 2 đối tượng cùng hình dạng') ||
+                bodyText.includes('Select 2 objects') ||
+                bodyText.includes('Verify to continue')) {
+                return true;
+            }
+            const iframes = document.querySelectorAll('iframe[src*="captcha"], iframe[src*="verify"], iframe[id*="captcha"]');
+            if (iframes.length > 0) return true;
+            return false;
+        }""")
+        if found_js:
+            return True
+    except Exception:
+        pass
+
+    # 2. Quét qua Playwright locator dự phòng
+    loc_selectors = [
         "#captcha-verify-image",
         ".captcha_verify_container",
         "#tiktok-verify-ele",
         ".sec-cpt-container",
         "[data-e2e='captcha-verify-container']",
         "iframe[src*='captcha']",
-        "text='Drag the slider to fit the puzzle'",
-        "text='Kéo thanh trượt để khớp hình ghép'",
-        "[class*='captcha_verify']",
-        "[class*='sec-cpt']"
+        "iframe[src*='verify']",
+        "div:has-text('Drag the slider')",
+        "div:has-text('Kéo thanh trượt')",
     ]
-    found = False
-    for sel in captcha_selectors:
+    for sel in loc_selectors:
         try:
-            if page.locator(sel).first.is_visible(timeout=300):
-                found = True
-                break
+            if page.locator(sel).first.is_visible(timeout=150):
+                return True
         except Exception:
             pass
+    return False
 
-    if found:
-        log.warning("=" * 65)
-        log.warning("[XÁC MINH BẢO MẬT] TikTok đang hiển thị mã CAPTCHA (Kéo hình ghép / Puzzle)!")
-        if is_headless:
-            log.warning(">> Đang chạy ở chế độ ẨN (Headless) nên không thể thao tác kéo thanh trượt trên màn hình.")
-            log.warning(">> GIẢI PHÁP:")
-            log.warning("   1. Mở file CHAY_BOT_PC.bat -> Chọn [4] -> Chọn [1] (Cửa sổ trực quan).")
-            log.warning("   2. Dùng chuột kéo khớp hình ghép 1 lần duy nhất.")
-            log.warning("   3. Phiên sạch (s_v_web_id) sẽ được lưu vĩnh viễn vào session file để chạy ẩn không bao giờ bị hỏi lại.")
-            log.warning("=" * 65)
-            return False
-        else:
-            log.info(">> Boss man vui lòng dùng chuột kéo thanh trượt / vượt CAPTCHA bằng tay trên cửa sổ trình duyệt.")
-            log.info(">> Bot đang tự động tạm dừng chờ boss man hoàn tất (tối đa 120 giây)...")
-            log.warning("=" * 65)
 
-        start_wait = time.time()
-        while time.time() - start_wait < 120:
-            still = False
-            for sel in captcha_selectors:
+def detect_and_wait_for_manual_captcha(page, context=None, cookie_file=None, is_headless: bool = False, max_wait: int = 180) -> bool:
+    """Kiểm tra nếu TikTok yêu cầu giải CAPTCHA thì tạm dừng để boss man kéo bằng tay."""
+    # Cho DOM ổn định 0.5s
+    human_sleep(0.4, 0.7)
+
+    if not is_captcha_present(page):
+        return False
+
+    # Đã phát hiện CAPTCHA!
+    print("\a", end="", flush=True)  # Kêu tiếng beep báo động trên PC
+    log.warning("=" * 70)
+    log.warning("[XÁC MINH BẢO MẬT] PHÁT HIỆN TIKTOK ĐANG HIỂN THỊ MÃ CAPTCHA TRÊN MÀN HÌNH!")
+    if is_headless:
+        log.warning(">> Đang chạy ở chế độ ẨN (Headless) nên không thể thao tác kéo chuột.")
+        log.warning(">> GIẢI PHÁP:")
+        log.warning("   1. Mở file CHAY_BOT_PC.bat -> Chọn [5] -> Chọn [1] (Có cửa sổ trực quan).")
+        log.warning("   2. Dùng chuột kéo khớp hình ghép 1 lần duy nhất.")
+        log.warning("   3. Phiên sạch (s_v_web_id) sẽ được lưu vĩnh viễn vào session file để chạy ẩn không bao giờ bị hỏi lại.")
+        log.warning("=" * 70)
+        return False
+    else:
+        log.info(">> Boss man vui lòng dùng chuột KÉO THANH TRƯỢT / VƯỢT CAPTCHA trên cửa sổ trình duyệt.")
+        log.info(f">> Bot đang TỰ ĐỘNG TẠM DỪNG và chờ boss man thao tác (Tối đa {max_wait} giây)...")
+        log.info(">> (Ngay sau khi boss man kéo xong, bot sẽ tự động nhận diện và tiếp tục chạy)")
+        log.warning("=" * 70)
+
+    start_wait = time.time()
+    last_print = 0
+    while time.time() - start_wait < max_wait:
+        human_sleep(1.0, 1.5)
+
+        # Kiểm tra xem CAPTCHA đã biến mất chưa
+        if not is_captcha_present(page):
+            log.info("=" * 70)
+            log.info("[Thành công] Đã vượt qua CAPTCHA thành công! Tiếp tục tiến trình...")
+            log.info("=" * 70)
+            human_sleep(2.0, 3.0)
+
+            # Cập nhật và lưu ngay cookie sạch đã xác thực vào file
+            if context and cookie_file:
                 try:
-                    if page.locator(sel).first.is_visible(timeout=300):
-                        still = True
-                        break
-                except Exception:
-                    pass
-            if not still:
-                log.info("[Thành công] Đã vượt qua CAPTCHA thành công! Bot tiếp tục xử lý...")
-                human_sleep(1.5, 2.5)
-                if context and cookie_file:
-                    try:
-                        with open(cookie_file, "w", encoding="utf-8") as f:
-                            json.dump(context.cookies(), f, indent=2)
-                        log.info(f"[Đã lưu] Đã cập nhật lại cookie sạch vào {cookie_file}.")
-                    except Exception:
-                        pass
-                return True
-            time.sleep(1.5)
-        log.warning("[Hết giờ] Quá 120 giây chờ xác minh CAPTCHA.")
+                    fresh_cookies = context.cookies()
+                    with open(cookie_file, "w", encoding="utf-8") as f:
+                        json.dump(fresh_cookies, f, indent=2)
+                    log.info(f"[Đã lưu] Đã cập nhật token sạch (s_v_web_id) vào {cookie_file}.")
+                except Exception as save_err:
+                    log.warning(f"Không thể lưu cookie: {save_err}")
+            return True
+
+        elapsed = int(time.time() - start_wait)
+        if elapsed - last_print >= 10:
+            last_print = elapsed
+            rem = max_wait - elapsed
+            log.info(f"   [Đang chờ boss man kéo CAPTCHA...] Đã chờ {elapsed}s (Còn lại {rem}s)")
+
+    log.warning(f"[Hết giờ] Đã quá {max_wait} giây chờ xác minh CAPTCHA.")
     return False
 
 
@@ -748,6 +801,9 @@ def open_conversation_with_user(page, username: str, context=None, cookie_file=N
             human_sleep(0.8, 1.2)
         except Exception:
             pass
+
+    # Nếu có CAPTCHA xuất hiện trên trang tin nhắn thì dừng lại ngay để boss man kéo
+    detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
 
     # ── CÁCH 1: KIỂM TRA TRONG DANH SÁCH HỘI THOẠI ĐANG MỞ TRÊN /messages ──
     try:
@@ -1280,6 +1336,9 @@ def main():
                 log.info("[Dieu huong] Dang mo lai hop thu tin nhan...")
                 page.goto("https://www.tiktok.com/messages", timeout=30000)
                 page.wait_for_timeout(2000)
+
+            # Tạm dừng chờ boss man kéo CAPTCHA nếu TikTok yêu cầu
+            detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
 
             # Gui chuoi lua giu chuoi cho targets.txt
             force_now = (bot_mode == "target")

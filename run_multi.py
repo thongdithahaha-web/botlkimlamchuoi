@@ -204,6 +204,8 @@ def main():
             try:
                 page.goto("https://www.tiktok.com/messages", timeout=45000)
                 page.wait_for_timeout(2000)
+                # Tạm dừng nếu TikTok yêu cầu giải CAPTCHA để boss man kéo
+                run_local.detect_and_wait_for_manual_captcha(page, context=context, cookie_file=sf, is_headless=is_headless)
             except Exception as e:
                 log.warning(f"[{tag}] Lỗi tải trang tin nhắn: {e}")
 
@@ -247,6 +249,9 @@ def main():
                     if not page.url.startswith("https://www.tiktok.com/messages"):
                         page.goto("https://www.tiktok.com/messages", timeout=30000)
                         page.wait_for_timeout(1500)
+
+                    # Tạm dừng chờ boss man kéo CAPTCHA nếu TikTok yêu cầu
+                    run_local.detect_and_wait_for_manual_captcha(page, context=acc["context"], cookie_file=acc["session_file"], is_headless=is_headless)
 
                     # Gui chuoi lua cho danh sach targets.txt
                     force_send = (bot_mode == "target")
