@@ -1,0 +1,15 @@
+# Session cookies nhạy cảm (bảo vệ tài khoản cá nhân)
+session*.json
+sessions/
+*.cookie
+chrome_profile/
+
+# Dữ liệu nội bộ và nhật ký
+*.log
+__pycache__/
+*.pyc
+user_quota*.json
+streak_history.json
+replied_users.txt
+.runner.sh
+tiktok_autobot/

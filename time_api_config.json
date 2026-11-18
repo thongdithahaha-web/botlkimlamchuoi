@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "url": "https://apitime-nine.vercel.app/api/v1/vietnam-time",
+  "api_key": "vn_live_8812dcca5712a2fcb01b531a",
+  "backup_api_key": "vn_live_demo_vietnam_time_2026",
+  "notes": "Web API thời gian thực chuẩn Việt Nam của lkimlamdev trên Vercel."
+}
