@@ -148,12 +148,16 @@ def main():
 
         launch_kwargs = {
             "headless": is_headless,
-            "slow_mo": 20 if not is_headless else 0,
+            "slow_mo": 10 if not is_headless else 0,
             "args": [
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--no-first-run",
+                "--no-default-browser-check",
             ],
+            "ignore_default_args": ["--enable-automation"],
         }
         if exec_path and sys.platform != "win32":
             launch_kwargs["executable_path"] = exec_path
@@ -170,10 +174,18 @@ def main():
                 viewport={"width": 1280, "height": 800} if is_headless else None,
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
                 ),
                 locale="vi-VN",
             )
+            context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+                window.navigator.chrome = {
+                    runtime: {},
+                };
+            """)
 
             # Nạp cookie
             try:
@@ -184,6 +196,11 @@ def main():
                 continue
 
             page = context.new_page()
+            try:
+                page.route("**/*", lambda route: route.abort() if route.request.resource_type == "media" else route.continue_())
+            except Exception:
+                pass
+
             try:
                 page.goto("https://www.tiktok.com/messages", timeout=45000)
                 page.wait_for_timeout(2000)
@@ -233,7 +250,14 @@ def main():
 
                     # Gui chuoi lua cho danh sach targets.txt
                     force_send = (bot_mode == "target")
-                    run_local.check_and_send_daily_streaks(page, hub, q_tracker, force_now=force_send, session_tag=tag)
+                    run_local.check_and_send_daily_streaks(
+                        page, hub, q_tracker,
+                        force_now=force_send,
+                        session_tag=tag,
+                        context=acc["context"],
+                        cookie_file=acc["session_file"],
+                        is_headless=is_headless
+                    )
                 except Exception as err:
                     log.warning(f"[{tag}] Loi trong chu ky giu chuoi: {err}")
 

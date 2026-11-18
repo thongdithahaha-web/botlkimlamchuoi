@@ -58,7 +58,7 @@ MAX_REPLIES_PER_USER = 999999
 SCAN_INTERVAL_SECONDS = 4
 
 # Giãn cách giữa các tin trong chuỗi (giây) để vừa gửi nhanh vừa an toàn
-CHAIN_DELAY_RANGE = (1.0, 1.8)
+CHAIN_DELAY_RANGE = (0.35, 0.65)
 
 # Cooldown ngắn (giây) để vừa rep xong không bị lặp chính mình, nhưng người đó nhắn lại là rep tiếp ngay
 USER_COOLDOWN_SECONDS = 8
@@ -444,13 +444,13 @@ def send_chain_messages(page, username: str, hub: RemoteHubSync) -> bool:
         hub.add_log(f"Gui [{idx}/{total_msgs}] toi @{username}: {msg[:25]}")
         try:
             editor.click()
-            human_sleep(0.2, 0.4)
-            # Nếu là emoji thì dùng insert_text để tránh lỗi mã hóa ký tự đặc biệt
+            human_sleep(0.1, 0.2)
+            # Nếu là emoji thì dùng insert_text để gửi nhanh và tránh lỗi mã hóa
             if any(ord(c) > 0xFFFF for c in msg):
                 page.keyboard.insert_text(msg)
             else:
-                page.keyboard.type(msg, delay=random.randint(25, 55))
-            human_sleep(0.3, 0.5)
+                page.keyboard.type(msg, delay=random.randint(10, 25))
+            human_sleep(0.1, 0.2)
             page.keyboard.press("Enter")
             human_sleep(*CHAIN_DELAY_RANGE)
         except Exception as err:
@@ -605,7 +605,7 @@ def load_targets() -> list:
     return targets
 
 
-def detect_and_wait_for_manual_captcha(page, context=None, cookie_file=None) -> bool:
+def detect_and_wait_for_manual_captcha(page, context=None, cookie_file=None, is_headless: bool = False) -> bool:
     """Kiểm tra nếu TikTok yêu cầu giải CAPTCHA thì tạm dừng để boss man kéo bằng tay."""
     captcha_selectors = [
         "#captcha-verify-image",
@@ -614,6 +614,10 @@ def detect_and_wait_for_manual_captcha(page, context=None, cookie_file=None) -> 
         ".sec-cpt-container",
         "[data-e2e='captcha-verify-container']",
         "iframe[src*='captcha']",
+        "text='Drag the slider to fit the puzzle'",
+        "text='Kéo thanh trượt để khớp hình ghép'",
+        "[class*='captcha_verify']",
+        "[class*='sec-cpt']"
     ]
     found = False
     for sel in captcha_selectors:
@@ -626,10 +630,19 @@ def detect_and_wait_for_manual_captcha(page, context=None, cookie_file=None) -> 
 
     if found:
         log.warning("=" * 65)
-        log.warning("[XÁC MINH BẢO MẬT] TikTok đang hiển thị mã CAPTCHA trên màn hình!")
-        log.info(">> Boss man vui lòng dùng chuột kéo thanh trượt / vượt CAPTCHA bằng tay trên cửa sổ trình duyệt.")
-        log.info(">> Bot đang tự động tạm dừng chờ boss man hoàn tất (tối đa 120 giây)...")
-        log.warning("=" * 65)
+        log.warning("[XÁC MINH BẢO MẬT] TikTok đang hiển thị mã CAPTCHA (Kéo hình ghép / Puzzle)!")
+        if is_headless:
+            log.warning(">> Đang chạy ở chế độ ẨN (Headless) nên không thể thao tác kéo thanh trượt trên màn hình.")
+            log.warning(">> GIẢI PHÁP:")
+            log.warning("   1. Mở file CHAY_BOT_PC.bat -> Chọn [4] -> Chọn [1] (Cửa sổ trực quan).")
+            log.warning("   2. Dùng chuột kéo khớp hình ghép 1 lần duy nhất.")
+            log.warning("   3. Phiên sạch (s_v_web_id) sẽ được lưu vĩnh viễn vào session file để chạy ẩn không bao giờ bị hỏi lại.")
+            log.warning("=" * 65)
+            return False
+        else:
+            log.info(">> Boss man vui lòng dùng chuột kéo thanh trượt / vượt CAPTCHA bằng tay trên cửa sổ trình duyệt.")
+            log.info(">> Bot đang tự động tạm dừng chờ boss man hoàn tất (tối đa 120 giây)...")
+            log.warning("=" * 65)
 
         start_wait = time.time()
         while time.time() - start_wait < 120:
@@ -676,83 +689,103 @@ def is_chat_editor_ready(page, timeout: int = 4000) -> bool:
     return False
 
 
-def open_conversation_with_user(page, username: str, context=None) -> bool:
+def open_conversation_with_user(page, username: str, context=None, cookie_file=None, is_headless: bool = False) -> bool:
     """
-    Tìm và mở hội thoại với @username bằng 3 phương pháp liên hoàn:
-    1. Kiểm tra danh sách hội thoại gần đây (trên trang /messages).
-    2. Gõ tìm kiếm vào ô tìm kiếm tin nhắn (trên trang /messages).
-    3. Truy cập trực tiếp trang cá nhân https://www.tiktok.com/@username và bấm nút 'Tin nhắn'
-       với bộ nhận diện toàn diện (16 selectors tiếng Việt, tiếng Anh, aria-label, SVG, role=button).
+    Tìm và mở hội thoại với @username bằng 3 phương pháp liên hoàn siêu tốc:
+    1. Quét ngay trong danh sách hội thoại trên /messages (dùng evaluate JavaScript cực nhanh ~0.05s).
+    2. Gõ tìm kiếm vào ô tìm kiếm tin nhắn trên /messages (nhanh ~0.8s, không rời trang).
+    3. (Dự phòng) Truy cập trang cá nhân nếu 2 cách trên không tìm thấy.
     """
     clean_u = username.strip().lstrip("@")
 
-    # ── CÁCH 1: TÌM TRONG DANH SÁCH HỘI THOẠI ĐANG MỞ (Nếu đang ở /messages) ──
-    if "tiktok.com/messages" in page.url.lower():
+    # Đảm bảo đang ở trang /messages để tận dụng tốc độ cao và tránh bị hỏi CAPTCHA
+    if not page.url.startswith("https://www.tiktok.com/messages"):
         try:
-            user_items = page.locator(
-                f'[data-e2e="dm-new-conversation-item"]:has-text("{clean_u}"), '
-                f'[data-e2e="chat-list-item"]:has-text("{clean_u}"), '
-                f'div[role="listitem"]:has-text("{clean_u}")'
-            )
-            if user_items.count() > 0:
-                user_items.first.click()
-                human_sleep(1.2, 2.0)
+            page.goto("https://www.tiktok.com/messages", timeout=25000, wait_until="domcontentloaded")
+            human_sleep(0.8, 1.2)
+        except Exception:
+            pass
+
+    # ── CÁCH 1: QUÉT TRONG DANH SÁCH HỘI THOẠI CỦA /messages BẰNG JAVASCRIPT (Siêu tốc 0.05s) ──
+    try:
+        found_in_list = page.evaluate("""(u) => {
+            const clean = u.toLowerCase();
+            const items = document.querySelectorAll('[data-e2e="dm-new-conversation-item"], [data-e2e="chat-list-item"], div[role="listitem"]');
+            for (const item of items) {
+                const text = (item.innerText || '').toLowerCase();
+                if (text.includes(clean)) {
+                    item.click();
+                    return true;
+                }
+            }
+            return false;
+        }""", clean_u)
+        if found_in_list:
+            human_sleep(0.4, 0.7)
+            if is_chat_editor_ready(page, timeout=2000):
+                log.info(f"   -> [Cách 1] Đã mở cuộc trò chuyện có sẵn với @{clean_u} (Siêu tốc)")
+                return True
+    except Exception:
+        pass
+
+    # ── CÁCH 2: TÌM QUA THANH TÌM KIẾM TIN NHẮN TRÊN /messages (Không rời trang, không dính CAPTCHA) ──
+    try:
+        search_inputs = page.locator(
+            'input[data-e2e="search-user-input"], '
+            'input[data-e2e="im-search-input"], '
+            'input[placeholder*="Tìm" i], '
+            'input[placeholder*="Search" i], '
+            'input[type="search"]'
+        )
+        if search_inputs.count() > 0:
+            s_box = search_inputs.first
+            s_box.click()
+            s_box.fill("")
+            s_box.fill(clean_u)
+            human_sleep(0.5, 0.8)
+            page.keyboard.press("Enter")
+            human_sleep(0.5, 0.8)
+
+            clicked = page.evaluate("""(u) => {
+                const clean = u.toLowerCase();
+                const results = document.querySelectorAll('[data-e2e="search-user-item"], [data-e2e="im-search-user-item"], [data-e2e="dm-new-conversation-item"], [class*="SearchUser"], [class*="UserItem"], div[role="option"]');
+                for (const r of results) {
+                    const text = (r.innerText || '').toLowerCase();
+                    if (text.includes(clean)) {
+                        r.click();
+                        return true;
+                    }
+                }
+                if (results.length > 0) {
+                    results[0].click();
+                    return true;
+                }
+                return false;
+            }""", clean_u)
+
+            if clicked:
+                human_sleep(0.6, 1.0)
                 if is_chat_editor_ready(page, timeout=3000):
-                    log.info(f"   -> [Cách 1] Đã mở cuộc trò chuyện có sẵn với @{clean_u}")
+                    log.info(f"   -> [Cách 2] Tìm thấy và mở hội thoại với @{clean_u} qua ô tìm kiếm!")
                     return True
-        except Exception:
-            pass
-
-    # ── CÁCH 2: TÌM QUA THANH TÌM KIẾM TIN NHẮN (/messages) ──
-    if "tiktok.com/messages" in page.url.lower():
-        try:
-            search_inputs = page.locator(
-                'input[data-e2e="search-user-input"], '
-                'input[data-e2e="im-search-input"], '
-                'input[placeholder*="Tìm" i], '
-                'input[placeholder*="Search" i], '
-                'input[type="search"]'
-            )
-            if search_inputs.count() > 0:
-                s_box = search_inputs.first
-                s_box.click()
-                human_sleep(0.3, 0.6)
-                s_box.fill("")
-                s_box.fill(clean_u)
-                human_sleep(1.2, 2.0)
-
-                search_results = page.locator(
-                    f'[data-e2e="search-user-item"]:has-text("{clean_u}"), '
-                    f'[data-e2e="im-search-user-item"]:has-text("{clean_u}"), '
-                    f'[data-e2e="dm-new-conversation-item"]:has-text("{clean_u}"), '
-                    f'div[role="listbox"] div:has-text("{clean_u}"), '
-                    f'[class*="SearchUser"]:has-text("{clean_u}"), '
-                    f'[class*="SearchResult"]:has-text("{clean_u}")'
-                )
-                if search_results.count() > 0:
-                    search_results.first.click()
-                    human_sleep(1.5, 2.5)
-                    if is_chat_editor_ready(page, timeout=4000):
-                        log.info(f"   -> [Cách 2] Tìm thấy và mở hội thoại với @{clean_u} qua ô tìm kiếm!")
-                        return True
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     # ── CÁCH 3: TRUY CẬP TRỰC TIẾP TRANG CÁ NHÂN https://www.tiktok.com/@username ──
     try:
         profile_url = f"https://www.tiktok.com/@{clean_u}"
         log.info(f"   -> [Cách 3] Vào trang cá nhân của bạn bè: {profile_url}")
-        page.goto(profile_url, timeout=35000, wait_until="domcontentloaded")
-        human_sleep(2.0, 3.5)
+        page.goto(profile_url, timeout=30000, wait_until="domcontentloaded")
+        human_sleep(1.5, 2.5)
 
         # Kiểm tra nếu có CAPTCHA
-        detect_and_wait_for_manual_captcha(page, context)
+        detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
 
         # Chờ header profile tải xong (chứa các nút Follow / Tin nhắn)
         try:
             page.wait_for_selector(
                 'button, a[href*="/messages"], [data-e2e="message-button"], [role="button"]',
-                timeout=8000
+                timeout=6000
             )
         except Exception:
             pass
@@ -787,7 +820,7 @@ def open_conversation_with_user(page, username: str, context=None) -> bool:
         for sel in msg_button_selectors:
             try:
                 btn_loc = page.locator(sel)
-                if btn_loc.count() > 0 and btn_loc.first.is_visible(timeout=1000):
+                if btn_loc.count() > 0 and btn_loc.first.is_visible(timeout=800):
                     msg_btn = btn_loc.first
                     break
             except Exception:
@@ -809,18 +842,18 @@ def open_conversation_with_user(page, username: str, context=None) -> bool:
                 pass
 
         if msg_btn:
-            msg_btn.scroll_into_view_if_needed(timeout=3000)
-            human_sleep(0.5, 1.0)
+            msg_btn.scroll_into_view_if_needed(timeout=2000)
+            human_sleep(0.3, 0.6)
             msg_btn.click()
-            human_sleep(2.0, 3.5)
+            human_sleep(1.5, 2.5)
 
-            if is_chat_editor_ready(page, timeout=8000):
+            if is_chat_editor_ready(page, timeout=5000):
                 log.info(f"   -> [Cách 3] Đã bấm nút Tin nhắn thành công trên trang cá nhân của @{clean_u}!")
                 return True
             else:
                 # Nếu TikTok điều hướng sang /messages sau khi bấm
                 if "tiktok.com/messages" in page.url.lower():
-                    if is_chat_editor_ready(page, timeout=8000):
+                    if is_chat_editor_ready(page, timeout=5000):
                         log.info(f"   -> [Cách 3] Đã chuyển tới hộp thư của @{clean_u}!")
                         return True
         else:
@@ -832,7 +865,7 @@ def open_conversation_with_user(page, username: str, context=None) -> bool:
     return False
 
 
-def check_and_send_daily_streaks(page, hub: RemoteHubSync, quota_tracker: UserQuotaTracker, force_now: bool = False, session_tag: str = "default"):
+def check_and_send_daily_streaks(page, hub: RemoteHubSync, quota_tracker: UserQuotaTracker, force_now: bool = False, session_tag: str = "default", context=None, cookie_file: str = None, is_headless: bool = False):
     """Kiểm tra giờ hẹn hoặc kích hoạt ngay nếu force_now=True để gửi chuỗi cho targets.txt."""
     cfg = load_streak_config()
     if not cfg.get("enabled", True) and not force_now:
@@ -901,7 +934,7 @@ def check_and_send_daily_streaks(page, hub: RemoteHubSync, quota_tracker: UserQu
         log.info(f"[Giữ chuỗi] Đang gửi chuỗi cho bạn bè: @{username}")
         hub.add_log(f"Đang gửi chuỗi lửa cho @{username}")
 
-        found = open_conversation_with_user(page, username)
+        found = open_conversation_with_user(page, username, context=context, cookie_file=cookie_file, is_headless=is_headless)
         if found:
             success = send_chain_messages(page, username, hub)
             if success:
@@ -915,7 +948,7 @@ def check_and_send_daily_streaks(page, hub: RemoteHubSync, quota_tracker: UserQu
                     pass
                 log.info(f"[{session_tag}] Đã thắp lửa chuỗi thành công cho @{username}!")
                 hub.add_log(f"[{session_tag}] Đã thắp lửa thành công cho @{username}")
-                human_sleep(4.0, 7.0)
+                human_sleep(1.0, 2.0)
 
     # Đưa lại về trang tin nhắn chính sau khi hoàn thành
     if not page.url.startswith("https://www.tiktok.com/messages"):
@@ -1039,13 +1072,17 @@ def main():
 
         launch_kwargs = {
             "headless": is_headless,
-            "slow_mo": 30 if not is_headless else 0,
+            "slow_mo": 10 if not is_headless else 0,
             "args": [
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--no-first-run",
+                "--no-default-browser-check",
                 "--start-maximized"
             ],
+            "ignore_default_args": ["--enable-automation"],
         }
 
         # Nếu tìm thấy Chromium hệ thống thì ưu tiên dùng ngay không cần tải thêm
@@ -1067,10 +1104,18 @@ def main():
             viewport=None if not is_headless else {"width": 1280, "height": 800},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
             ),
             locale="vi-VN",
         )
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            window.navigator.chrome = {
+                runtime: {},
+            };
+        """)
 
         # Nếu người dùng muốn đăng nhập nick mới để tạo session riêng
         if new_session_target:
@@ -1103,11 +1148,17 @@ def main():
 
         page = context.new_page()
 
+        # Chặn tải video stream nặng để tăng tốc độ tải trang lên 300%
+        try:
+            page.route("**/*", lambda route: route.abort() if route.request.resource_type == "media" else route.continue_())
+        except Exception:
+            pass
+
         # Mở trang tin nhắn TikTok
         log.info(f"[TikTok - {session_tag}] Dang truy cap hop thu tin nhan...")
         page.goto("https://www.tiktok.com/messages", timeout=45000)
         page.wait_for_timeout(3000)
-        detect_and_wait_for_manual_captcha(page, context, cookie_file)
+        detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
 
         # Nếu chưa đăng nhập
         if "login" in page.url.lower() or not os.path.exists(cookie_file):
@@ -1149,7 +1200,7 @@ def main():
 
             # Gui chuoi lua giu chuoi cho targets.txt
             force_now = (bot_mode == "target")
-            check_and_send_daily_streaks(page, hub, quota_tracker, force_now=force_now, session_tag=session_tag)
+            check_and_send_daily_streaks(page, hub, quota_tracker, force_now=force_now, session_tag=session_tag, context=context, cookie_file=cookie_file, is_headless=is_headless)
 
             if bot_mode == "target":
                 log.info("[Hoan tat] Da gui xong chuoi streak cho toan bo nick trong targets.txt. Ket thuc!")
