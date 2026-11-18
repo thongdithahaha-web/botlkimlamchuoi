@@ -12,18 +12,20 @@ echo.
 echo   [1] BAN TOAN BO CODE, MENU 7 MAU VA COOKIE SANG DIEN THOAI (0.5s) [Mac dinh]
 echo   [2] Dang nhap va Tao file cookie session moi cho nick TikTok
 echo   [3] Cai dat gio hen tren PC (Dong bo sang dien thoai)
-echo   [4] Chay truc tiep tren may tinh (Neu muon test tren PC)
+echo   [4] Quan ly & Bo sung danh sach Target ban be (Xem danh sach, Them nick)
+echo   [5] Chay truc tiep tren may tinh (Neu muon test tren PC)
 echo.
 echo   [0] Thoat
 echo ========================================================================
 echo.
-set /p choice="Nhap lua chon [1-4, 0] (Nhan Enter de ban file ngay): "
+set /p choice="Nhap lua chon [1-5, 0] (Nhan Enter de ban file ngay): "
 if "%choice%"=="" set choice=1
 
 if "%choice%"=="1" goto PUSH
 if "%choice%"=="2" goto NEWSESSION
 if "%choice%"=="3" goto STREAK_CONFIG
-if "%choice%"=="4" goto RUN_PC
+if "%choice%"=="4" goto MANAGE_TARGETS
+if "%choice%"=="5" goto RUN_PC
 if "%choice%"=="0" exit
 goto PUSH
 
@@ -84,6 +86,19 @@ echo [Thanh cong] Da dong bo gio hen sang dien thoai.
 pause
 goto MENU
 
+:MANAGE_TARGETS
+cls
+python hen_gio.py --targets
+echo.
+set /p push_tgt="Ban danh sach targets.txt moi nay sang dien thoai Termux ngay? [y/n, mac dinh y]: "
+if /i "%push_tgt%"=="n" goto MENU
+scp targets.txt termux:~/tiktok_bot/ 2>nul
+ssh termux "cp -f ~/tiktok_bot/targets.txt /root/tiktok_bot/targets.txt 2>/dev/null" 2>nul
+echo.
+echo [Thanh cong] Da dong bo danh sach targets.txt sang dien thoai Termux!
+pause
+goto MENU
+
 :RUN_PC
 cls
 echo ========================================================================
@@ -93,13 +108,15 @@ echo.
 echo   [1] Session 1 (Co cua so trinh duyet)
 echo   [2] Session 1 (Chay an Headless)
 echo   [3] Chay da tai khoan song song (Nhap 1, 1 2, 1 2 3...)
+echo   [4] Quan ly & Bo sung danh sach Target ban be truoc khi chay
 echo.
 echo   [0] Quay lai Menu chinh
 echo ========================================================================
 echo.
-set /p pc_opt="Nhap lua chon tai khoan [1-3, 0, mac dinh 1]: "
+set /p pc_opt="Nhap lua chon tai khoan [1-4, 0, mac dinh 1]: "
 if "%pc_opt%"=="" set pc_opt=1
 if "%pc_opt%"=="0" goto MENU
+if "%pc_opt%"=="4" goto MANAGE_TARGETS
 
 set pc_sess=1
 if "%pc_opt%"=="3" (
@@ -115,13 +132,15 @@ echo ========================================================================
 echo.
 echo   [1] BAN STREAK CHO TARGETS NGAY LAP TUC (Gui chuoi ngay roi xong) [Mac dinh]
 echo   [2] CHAY HEN GIO HANG NGAY (Dung gio hen tu dong ban streak, khong rep nguoi la)
+echo   [3] Xem & Bo sung danh sach Target ban be truoc khi ban
 echo.
 echo   [0] Quay lai Menu chinh
 echo ========================================================================
 echo.
-set /p mode_opt="Nhap che do [1-2, 0, mac dinh 1]: "
+set /p mode_opt="Nhap che do [1-3, 0, mac dinh 1]: "
 if "%mode_opt%"=="" set mode_opt=1
 if "%mode_opt%"=="0" goto MENU
+if "%mode_opt%"=="3" goto MANAGE_TARGETS
 
 set BOT_M=target
 if "%mode_opt%"=="1" set BOT_M=target

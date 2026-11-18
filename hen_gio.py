@@ -142,35 +142,105 @@ def live_countdown_view(cfg: dict):
         print("\n")
 
 
-def manage_targets():
-    print(f"\n{C_CYAN}--- danh sách tài khoản bạn bè giữ chuỗi ({TARGETS_FILE}) ---{RESET}")
+def load_targets_list() -> list:
     targets = []
     if os.path.exists(TARGETS_FILE):
         with open(TARGETS_FILE, "r", encoding="utf-8") as f:
-            targets = [line.strip() for line in f if line.strip() and not line.startswith("#")]
-    
-    if targets:
-        for idx, u in enumerate(targets, 1):
-            print(f"  {idx}. @{u}")
-    else:
-        print(f"  {C_GRAY}(danh sách đang trống){RESET}")
+            for line in f:
+                raw = line.strip()
+                if raw and not raw.startswith("#"):
+                    clean = raw.lstrip("@").strip()
+                    if "/" in clean:
+                        clean = clean.split("/")[-1].lstrip("@")
+                    if clean and clean not in targets:
+                        targets.append(clean)
+    return targets
 
-    print(f"\n{C_YELLOW}[1]{RESET} thêm nick bạn bè mới")
-    print(f"{C_RED}[2]{RESET} xóa toàn bộ danh sách")
-    print(f"{C_GRAY}[0]{RESET} quay lại")
-    sub = input(f"{C_CYAN}>> chọn: {RESET}").strip()
-    if sub == "1":
-        new_u = input(f"{C_CYAN}nhập username tiktok (ví dụ: lkimlam_165): {RESET}").strip().lstrip("@")
-        if new_u:
-            with open(TARGETS_FILE, "a", encoding="utf-8") as f:
-                f.write(f"\n{new_u}\n")
-            print(f"{C_GREEN}đã thêm @{new_u} vào danh sách!{RESET}")
-    elif sub == "2":
-        confirm = input(f"{C_RED}xác nhận xóa hết danh sách? (y/n): {RESET}").strip().lower()
-        if confirm == "y":
-            with open(TARGETS_FILE, "w", encoding="utf-8") as f:
-                f.write("# danh sach targets giu chuoi\n")
-            print(f"{C_GREEN}đã làm trống danh sách!{RESET}")
+
+def save_targets_list(targets: list):
+    try:
+        with open(TARGETS_FILE, "w", encoding="utf-8") as f:
+            f.write("# ========================================================================\n")
+            f.write("# danh sach tai khoan ban be giu chuoi lua tiktok (targets.txt)\n")
+            f.write("# tac gia: le kim lam (@lkimlam_165)\n")
+            f.write("# ========================================================================\n")
+            for u in targets:
+                f.write(f"{u}\n")
+        return True
+    except Exception as e:
+        print(f"{C_RED}lỗi khi lưu targets: {e}{RESET}")
+        return False
+
+
+def manage_targets():
+    while True:
+        targets = load_targets_list()
+        print("\n" + rainbow_line("========================================================================"))
+        print(f"       {C_YELLOW}quản lý & bổ sung danh sách bạn bè giữ chuỗi ({len(targets)} nick){RESET}")
+        print(rainbow_line("========================================================================"))
+        if targets:
+            for idx, u in enumerate(targets, 1):
+                print(f"  {C_CYAN}{idx:2d}.{RESET} @{u}")
+        else:
+            print(f"  {C_GRAY}(danh sách hiện tại đang trống){RESET}")
+        print(rainbow_line("------------------------------------------------------------------------", 2))
+        print(f"  {C_GREEN}[1]{RESET} thêm nick bạn bè mới (nhập 1 hoặc nhiều nick cách nhau bằng dấu cách/phẩy)")
+        print(f"  {C_RED}[2]{RESET} xóa 1 nick khỏi danh sách (nhập số thứ tự)")
+        print(f"  {C_YELLOW}[3]{RESET} mở file targets.txt (notepad trên windows / nano trên termux)")
+        print(f"  {C_PURPLE}[4]{RESET} xóa toàn bộ danh sách")
+        print(f"  {C_GRAY}[0]{RESET} quay lại menu")
+        print(rainbow_line("========================================================================", 4))
+
+        sub = input(f"{C_CYAN}>> chọn chức năng [0-4, mặc định 0]: {RESET}").strip()
+        if sub == "1":
+            raw_input_u = input(f"\n{C_CYAN}nhập username tiktok (vd: ndn_nhan hoac _devvibecode, linhbo_25): {RESET}").strip()
+            if raw_input_u:
+                tokens = raw_input_u.replace(",", " ").replace(";", " ").split()
+                added_count = 0
+                for tok in tokens:
+                    clean = tok.strip().lstrip("@")
+                    if "/" in clean:
+                        clean = clean.split("/")[-1].lstrip("@")
+                    if clean and clean not in targets:
+                        targets.append(clean)
+                        added_count += 1
+                if added_count > 0:
+                    save_targets_list(targets)
+                    print(f"{C_GREEN}đã bổ sung thành công {added_count} nick vào targets.txt! (tổng: {len(targets)} nick){RESET}")
+                else:
+                    print(f"{C_YELLOW}nick này đã có sẵn trong danh sách!{RESET}")
+            time.sleep(1.2)
+        elif sub == "2":
+            if not targets:
+                print(f"{C_RED}danh sách đang trống!{RESET}")
+                time.sleep(1)
+                continue
+            del_idx = input(f"{C_CYAN}nhập số thứ tự nick muốn xóa [1-{len(targets)}]: {RESET}").strip()
+            if del_idx.isdigit():
+                idx_int = int(del_idx)
+                if 1 <= idx_int <= len(targets):
+                    removed = targets.pop(idx_int - 1)
+                    save_targets_list(targets)
+                    print(f"{C_GREEN}đã xóa @{removed} khỏi danh sách targets!{RESET}")
+                else:
+                    print(f"{C_RED}số thứ tự không tồn tại!{RESET}")
+            time.sleep(1.2)
+        elif sub == "3":
+            if sys.platform == "win32":
+                os.system(f"start notepad {TARGETS_FILE}")
+                print(f"{C_GREEN}đã mở file {TARGETS_FILE} bằng notepad!{RESET}")
+            else:
+                os.system(f"nano {TARGETS_FILE}")
+            time.sleep(1.2)
+        elif sub == "4":
+            confirm = input(f"{C_RED}xác nhận xóa toàn bộ danh sách? (y/n): {RESET}").strip().lower()
+            if confirm == "y":
+                targets = []
+                save_targets_list(targets)
+                print(f"{C_GREEN}đã làm trống danh sách targets.txt!{RESET}")
+            time.sleep(1.2)
+        elif sub in ("0", ""):
+            break
 
 
 def main_menu():
@@ -279,6 +349,12 @@ def main_menu():
 
 
 if __name__ == "__main__":
+    if any(arg in sys.argv for arg in ("--targets", "-t", "targets", "target")):
+        try:
+            manage_targets()
+        except KeyboardInterrupt:
+            print(f"\n{C_GRAY}đã thoát.{RESET}")
+        sys.exit(0)
     try:
         main_menu()
     except KeyboardInterrupt:

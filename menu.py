@@ -321,6 +321,15 @@ def sub_run_background_default():
     execute_bot_command(cmd, in_background=True)
     input("\nnhan enter de quay lai menu chinh...")
 
+# quản lý danh sách targets bạn bè
+def sub_manage_targets():
+    try:
+        import hen_gio
+        hen_gio.manage_targets()
+    except Exception as e:
+        print(f"Lỗi khi mở quản lý targets: {e}")
+        input("\nNhấn Enter để quay lại menu chính...")
+
 # hàm vòng lặp chính của menu
 def main_menu():
     env = detect_environment()
@@ -352,11 +361,12 @@ def main_menu():
         print("  [7] kiem tra trang thai bot dang chay ngam (tien trinh & log)")
         print("  [8] dung (tat) toan bo bot dang chay ngam")
         print("  [9] thiet lap termux & sshd khong bao gio tat (chay vinh vien 24/7)")
+        print("  [t] quan ly & bo sung danh sach targets.txt (xem, them, sua nick ban be)")
         print("  [0] thoat menu")
         print("========================================================================")
 
         try:
-            choice = input(">> chon chuc nang [0-9]: ").strip()
+            choice = input(">> chon chuc nang [0-9, t]: ").strip()
         except (KeyboardInterrupt, EOFError):
             print("\ntam biet boss man!\n")
             break
@@ -379,6 +389,8 @@ def main_menu():
             sub_stop_all_bots()
         elif choice == "9":
             sub_setup_keep_alive()
+        elif choice in ("t", "T", "target", "targets", "10"):
+            sub_manage_targets()
         elif choice in ("0", "q", "Q"):
             print("\ntam biet boss man!\n")
             break
