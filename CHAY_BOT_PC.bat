@@ -18,8 +18,10 @@ echo.
 echo   [0] Thoat
 echo ========================================================================
 echo.
+set choice=
 set /p choice="Nhap lua chon [1-5, 0] (Nhan Enter de ban file ngay): "
 if "%choice%"=="" set choice=1
+set choice=%choice: =%
 
 if "%choice%"=="1" goto PUSH
 if "%choice%"=="2" goto NEWSESSION
@@ -113,8 +115,10 @@ echo.
 echo   [0] Quay lai Menu chinh
 echo ========================================================================
 echo.
+set pc_opt=
 set /p pc_opt="Nhap lua chon tai khoan [1-4, 0, mac dinh 1]: "
 if "%pc_opt%"=="" set pc_opt=1
+set pc_opt=%pc_opt: =%
 if "%pc_opt%"=="0" goto MENU
 if "%pc_opt%"=="4" goto MANAGE_TARGETS
 
@@ -137,8 +141,10 @@ echo.
 echo   [0] Quay lai Menu chinh
 echo ========================================================================
 echo.
+set mode_opt=
 set /p mode_opt="Nhap che do [1-3, 0, mac dinh 1]: "
 if "%mode_opt%"=="" set mode_opt=1
+set mode_opt=%mode_opt: =%
 if "%mode_opt%"=="0" goto MENU
 if "%mode_opt%"=="3" goto MANAGE_TARGETS
 
