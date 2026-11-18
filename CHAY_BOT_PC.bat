@@ -12,7 +12,7 @@ echo.
 echo   [1] BAN TOAN BO CODE, MENU 7 MAU VA COOKIE SANG DIEN THOAI (0.5s) [Mac dinh]
 echo   [2] Dang nhap va Tao file cookie session moi cho nick TikTok
 echo   [3] Cai dat gio hen tren PC (Dong bo sang dien thoai)
-echo   [4] Quan ly & Bo sung danh sach Target ban be (Xem danh sach, Them nick)
+echo   [4] Quan ly va Bo sung danh sach Target ban be (Xem danh sach, Them nick)
 echo   [5] Chay truc tiep tren may tinh (Neu muon test tren PC)
 echo.
 echo   [0] Thoat
@@ -108,7 +108,7 @@ echo.
 echo   [1] Session 1 (Co cua so trinh duyet)
 echo   [2] Session 1 (Chay an Headless)
 echo   [3] Chay da tai khoan song song (Nhap 1, 1 2, 1 2 3...)
-echo   [4] Quan ly & Bo sung danh sach Target ban be truoc khi chay
+echo   [4] Quan ly va Bo sung danh sach Target ban be truoc khi chay
 echo.
 echo   [0] Quay lai Menu chinh
 echo ========================================================================
@@ -132,7 +132,7 @@ echo ========================================================================
 echo.
 echo   [1] BAN STREAK CHO TARGETS NGAY LAP TUC (Gui chuoi ngay roi xong) [Mac dinh]
 echo   [2] CHAY HEN GIO HANG NGAY (Dung gio hen tu dong ban streak, khong rep nguoi la)
-echo   [3] Xem & Bo sung danh sach Target ban be truoc khi ban
+echo   [3] Xem va Bo sung danh sach Target ban be truoc khi ban
 echo.
 echo   [0] Quay lai Menu chinh
 echo ========================================================================
