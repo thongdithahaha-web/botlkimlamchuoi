@@ -104,56 +104,64 @@ class DualTimeSync:
                 custom_url = api_cfg.get("url", "").strip()
                 custom_key = api_cfg.get("api_key", "").strip()
                 if api_cfg.get("enabled", True) and custom_url:
-                    req = urllib.request.Request(custom_url)
-                    if custom_key:
-                        req.add_header("X-API-Key", custom_key)
-                        req.add_header("Authorization", f"Bearer {custom_key}")
-                    req.add_header("User-Agent", "TikTokBot-TimeSync/1.0")
-                    with urllib.request.urlopen(req, timeout=3.0) as resp:
-                        body_bytes = resp.read()
-                        parsed_time = None
-                        # 1. Thử parse JSON
+                    # Cho phép thử 2 lần (đề phòng Vercel Serverless Function đang ngủ/cold-start)
+                    for attempt in range(1, 3):
                         try:
-                            json_data = json.loads(body_bytes.decode("utf-8"))
-                            # Ưu tiên trường iso hoặc unix chính xác
-                            if "iso" in json_data and isinstance(json_data["iso"], str):
-                                parsed_time = datetime.fromisoformat(json_data["iso"]).astimezone().replace(tzinfo=None)
-                            elif "unix" in json_data and isinstance(json_data["unix"], (int, float)):
-                                parsed_time = datetime.fromtimestamp(json_data["unix"])
-                            elif "unix_ms" in json_data and isinstance(json_data["unix_ms"], (int, float)):
-                                parsed_time = datetime.fromtimestamp(json_data["unix_ms"] / 1000.0)
-                            else:
-                                for k in ["datetime", "current_time", "now", "formatted"]:
-                                    if k in json_data and isinstance(json_data[k], str):
-                                        raw_val = json_data[k].replace("Z", "+00:00")
-                                        parsed_time = datetime.fromisoformat(raw_val).astimezone().replace(tzinfo=None)
-                                        break
+                            req = urllib.request.Request(custom_url)
+                            if custom_key:
+                                req.add_header("X-API-Key", custom_key)
+                                req.add_header("Authorization", f"Bearer {custom_key}")
+                            req.add_header("User-Agent", "TikTokBot-TimeSync/1.0")
+                            with urllib.request.urlopen(req, timeout=6.0) as resp:
+                                body_bytes = resp.read()
+                                parsed_time = None
+                                # 1. Thử parse JSON
+                                try:
+                                    json_data = json.loads(body_bytes.decode("utf-8"))
+                                    # Ưu tiên trường iso hoặc unix chính xác
+                                    if "iso" in json_data and isinstance(json_data["iso"], str):
+                                        parsed_time = datetime.fromisoformat(json_data["iso"]).astimezone().replace(tzinfo=None)
+                                    elif "unix" in json_data and isinstance(json_data["unix"], (int, float)):
+                                        parsed_time = datetime.fromtimestamp(json_data["unix"])
+                                    elif "unix_ms" in json_data and isinstance(json_data["unix_ms"], (int, float)):
+                                        parsed_time = datetime.fromtimestamp(json_data["unix_ms"] / 1000.0)
+                                    else:
+                                        for k in ["datetime", "current_time", "now", "formatted"]:
+                                            if k in json_data and isinstance(json_data[k], str):
+                                                raw_val = json_data[k].replace("Z", "+00:00")
+                                                parsed_time = datetime.fromisoformat(raw_val).astimezone().replace(tzinfo=None)
+                                                break
+                                        if not parsed_time:
+                                            for k in ["timestamp", "unixtime", "epoch", "time_t"]:
+                                                if k in json_data and isinstance(json_data[k], (int, float)):
+                                                    parsed_time = datetime.fromtimestamp(json_data[k])
+                                                    break
+                                except Exception:
+                                    pass
+
+                                # 2. Thử parse dạng chuỗi trực tiếp
                                 if not parsed_time:
-                                    for k in ["timestamp", "unixtime", "epoch", "time_t"]:
-                                        if k in json_data and isinstance(json_data[k], (int, float)):
-                                            parsed_time = datetime.fromtimestamp(json_data[k])
-                                            break
+                                    raw_str = body_bytes.decode("utf-8").strip().strip('"').strip("'")
+                                    try:
+                                        parsed_time = datetime.fromisoformat(raw_str.replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+                                    except Exception:
+                                        pass
+
+                                # 3. Dự phòng qua Header Date của response từ web boss man
+                                if not parsed_time and resp.headers.get("Date"):
+                                    dt = email.utils.parsedate_to_datetime(resp.headers.get("Date")).astimezone()
+                                    parsed_time = dt.replace(tzinfo=None)
+
+                                if parsed_time:
+                                    net_time = parsed_time
+                                    cls._last_source = f"Web API của Boss ({custom_url})"
+                                    break
                         except Exception:
-                            pass
-
-                        # 2. Thử parse dạng chuỗi trực tiếp
-                        if not parsed_time:
-                            raw_str = body_bytes.decode("utf-8").strip().strip('"').strip("'")
-                            try:
-                                parsed_time = datetime.fromisoformat(raw_str.replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
-                            except Exception:
-                                pass
-
-                        # 3. Dự phòng qua Header Date của response từ web boss man
-                        if not parsed_time and resp.headers.get("Date"):
-                            dt = email.utils.parsedate_to_datetime(resp.headers.get("Date")).astimezone()
-                            parsed_time = dt.replace(tzinfo=None)
-
-                        if parsed_time:
-                            net_time = parsed_time
-                            cls._last_source = f"Web API của Boss ({custom_url})"
-            except Exception as e:
-                log.warning(f"[Web API Boss] Không thể lấy giờ từ web: {e}")
+                            if attempt < 2:
+                                time.sleep(0.5)
+                                continue
+            except Exception:
+                pass
 
         # Ưu tiên 1: Lấy HTTP Date từ Google & Cloudflare (cổng 443 HTTPS không bao giờ bị chặn)
         if not net_time:
