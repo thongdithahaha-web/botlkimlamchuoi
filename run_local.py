@@ -635,8 +635,13 @@ def load_targets() -> list:
         try:
             with open(TARGETS_FILE, "r", encoding="utf-8") as f:
                 for line in f:
-                    u = line.strip().lstrip("@")
-                    if u and not u.startswith("#") and u not in targets:
+                    u = line.strip()
+                    if not u or u.startswith("#"):
+                        continue
+                    if "tiktok.com/@" in u:
+                        u = u.split("tiktok.com/@")[-1].split("?")[0].split("/")[0]
+                    u = u.strip().lstrip("@").strip("/")
+                    if u and u not in targets:
                         targets.append(u)
         except Exception:
             pass
@@ -1068,6 +1073,13 @@ def open_conversation_with_user(page, username: str, context=None, cookie_file=N
             # Chờ TikTok chuyển hướng sang /messages an toàn (kể cả khi mở tab mới)
             for _ in range(16):
                 human_sleep(0.3, 0.5)
+                # Bắt CAPTCHA ngay lập tức nếu xuất hiện giữa chừng
+                if is_captcha_present(page):
+                    log.warning(f"   -> [Cách 3] CAPTCHA xuất hiện khi đang mở hộp thư! Tạm dừng để giải...")
+                    solved = detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
+                    if solved:
+                        human_sleep(1.5, 2.5)
+                    break
                 try:
                     if context and len(context.pages) > 1:
                         for p in reversed(context.pages):
@@ -1206,10 +1218,12 @@ def check_and_send_daily_streaks(page, hub: RemoteHubSync, quota_tracker: UserQu
             try:
                 found = open_conversation_with_user(page, username, context=context, cookie_file=cookie_file, is_headless=is_headless)
                 if found:
-                    success = send_chain_messages(page, username, hub)
+                    active_p = context.pages[-1] if (context and context.pages) else page
+                    success = send_chain_messages(active_p, username, hub)
                     if success:
                         quota_tracker.record_reply(username, "Giữ chuỗi lúc " + streak_time)
-                        sent_today.append(username)
+                        if username not in sent_today:
+                            sent_today.append(username)
                         history[record_key] = sent_today
                         try:
                             with open(STREAK_HISTORY_FILE, "w", encoding="utf-8") as f:
@@ -1220,6 +1234,14 @@ def check_and_send_daily_streaks(page, hub: RemoteHubSync, quota_tracker: UserQu
                         hub.add_log(f"[{session_tag}] Đã thắp lửa thành công cho @{username}")
                         human_sleep(1.0, 2.0)
                         user_success = True
+
+                        # Dọn dẹp các tab phụ nếu có mở ra
+                        if context and len(context.pages) > 1:
+                            for extra_p in list(context.pages)[:-1]:
+                                try:
+                                    extra_p.close()
+                                except Exception:
+                                    pass
                         break
                     else:
                         log.warning(f"[{session_tag}] Không thể gửi trọn vẹn chuỗi tin cho @{username}")
@@ -1262,6 +1284,42 @@ def check_and_send_daily_streaks(page, hub: RemoteHubSync, quota_tracker: UserQu
             pass
 
 
+def resolve_session_file(item: str) -> str:
+    """Quy đổi linh hoạt giữa '1', '2', 'session1', 'session2' thành đường dẫn file json chính xác."""
+    if not item:
+        return None
+    item = str(item).strip().strip("'\"")
+    if os.path.isabs(item) and os.path.exists(item):
+        return os.path.abspath(item)
+
+    norm = item.lower().replace("-", "_").replace(".json", "")
+    cand_names = [
+        f"{item}.json" if not item.endswith(".json") else item,
+        f"{norm}.json",
+        f"session{norm}.json",
+        f"session_{norm}.json",
+        item,
+    ]
+    if norm in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+        cand_names.insert(0, f"session{norm}.json")
+        cand_names.insert(0, f"session_{norm}.json")
+    elif norm.startswith("acc"):
+        num = norm.replace("acc", "").strip("_")
+        cand_names.insert(0, f"session{num}.json")
+        cand_names.insert(0, f"session_{norm}.json")
+
+    sessions_dir = os.path.join(BASE_DIR, "sessions")
+    for name in cand_names:
+        p1 = os.path.join(sessions_dir, name)
+        if os.path.exists(p1):
+            return os.path.abspath(p1)
+        p2 = os.path.join(BASE_DIR, name)
+        if os.path.exists(p2):
+            return os.path.abspath(p2)
+
+    return os.path.abspath(os.path.join(sessions_dir, f"session{norm}.json" if norm.isdigit() else (item if item.endswith(".json") else f"{item}.json")))
+
+
 # ══════════════════════════════════════════════════════════════════════════
 #  CHƯƠNG TRÌNH KHỞI ĐỘNG CHÍNH
 # ══════════════════════════════════════════════════════════════════════════
@@ -1278,6 +1336,7 @@ def main():
     new_session_target = None
     custom_name = None
     bot_mode = "target"  # "target", "hen_gio"
+    raw_session_arg = None
 
     for idx, arg in enumerate(sys.argv):
         if arg == "--server" and idx + 1 < len(sys.argv):
@@ -1291,38 +1350,22 @@ def main():
         elif arg in ("--name", "-n") and idx + 1 < len(sys.argv):
             custom_name = sys.argv[idx + 1].strip()
         elif arg in ("--session", "-s") and idx + 1 < len(sys.argv):
-            cookie_file = sys.argv[idx + 1].strip()
+            raw_session_arg = sys.argv[idx + 1].strip()
         elif arg in ("--new-session", "--save-session") and idx + 1 < len(sys.argv):
             new_session_target = sys.argv[idx + 1].strip()
 
-    # Nếu người dùng chỉ định tên gợi nhớ qua --name hoặc -n (ví dụ: -n session1, -n 2, -n acc3)
-    if custom_name:
-        os.makedirs(os.path.join(BASE_DIR, "sessions"), exist_ok=True)
-        norm = custom_name.lower().replace("-", "_")
-        cand_paths = [
-            os.path.join(BASE_DIR, "sessions", f"{custom_name}.json"),
-            os.path.join(BASE_DIR, "sessions", f"session_{custom_name}.json"),
-            os.path.join(BASE_DIR, "sessions", f"session{custom_name}.json"),
-            os.path.join(BASE_DIR, f"{custom_name}.json"),
-            os.path.join(BASE_DIR, f"session_{custom_name}.json"),
-        ]
-        # Hỗ trợ tự động quy đổi linh hoạt giữa acc1, acc2, 1, 2, session1, session2
-        if norm.startswith("acc"):
-            num = norm.replace("acc", "").strip("_")
-            cand_paths.insert(0, os.path.join(BASE_DIR, "sessions", f"session{num}.json"))
-            cand_paths.insert(0, os.path.join(BASE_DIR, "sessions", f"session_{norm}.json"))
-        elif norm in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
-            cand_paths.insert(0, os.path.join(BASE_DIR, "sessions", f"session{norm}.json"))
+    # Phân giải chính xác file session cookie
+    target_ident = custom_name if custom_name else raw_session_arg
+    if target_ident:
+        resolved = resolve_session_file(target_ident)
+        if resolved:
+            cookie_file = resolved
+    elif not os.path.exists(cookie_file):
+        fallback_s1 = os.path.join(BASE_DIR, "sessions", "session1.json")
+        if os.path.exists(fallback_s1):
+            cookie_file = fallback_s1
 
-        chosen = None
-        for cp in cand_paths:
-            if os.path.exists(cp):
-                chosen = cp
-                break
-        cookie_file = chosen if chosen else cand_paths[0]
-        session_tag = custom_name
-    else:
-        session_tag = os.path.splitext(os.path.basename(cookie_file))[0]
+    session_tag = os.path.splitext(os.path.basename(cookie_file))[0]
 
     # Tạo file quota riêng cho từng session để không bị trùng lặp lịch sử
     quota_file = USER_QUOTA_FILE if session_tag == "session" else os.path.join(BASE_DIR, f"user_quota_{session_tag}.json")

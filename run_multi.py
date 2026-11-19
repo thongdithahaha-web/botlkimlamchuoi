@@ -246,6 +246,9 @@ def main():
                 q_tracker = acc["quota_tracker"]
 
                 try:
+                    if run_local.is_captcha_present(page):
+                        run_local.detect_and_wait_for_manual_captcha(page, context=acc["context"], cookie_file=acc["session_file"], is_headless=is_headless)
+
                     if not page.url.startswith("https://www.tiktok.com/messages"):
                         page.goto("https://www.tiktok.com/messages", timeout=30000)
                         page.wait_for_timeout(1500)
@@ -263,6 +266,14 @@ def main():
                         cookie_file=acc["session_file"],
                         is_headless=is_headless
                     )
+
+                    # Don dep cac tab phu neu co mo them de tiet kiem RAM
+                    if acc["context"] and len(acc["context"].pages) > 1:
+                        for extra_p in list(acc["context"].pages)[:-1]:
+                            try:
+                                extra_p.close()
+                            except Exception:
+                                pass
                 except Exception as err:
                     log.warning(f"[{tag}] Loi trong chu ky giu chuoi: {err}")
 

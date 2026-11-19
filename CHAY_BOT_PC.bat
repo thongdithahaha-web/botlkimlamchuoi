@@ -37,7 +37,7 @@ echo ========================================================================
 echo   DANG BAN TOAN BO DU LIEU SANG DIEN THOAI TERMUX...
 echo ========================================================================
 echo.
-scp -r menu.py menu.sh CHAY_BOT_PHONE.sh hen_gio.py run_local.py run_multi.py sessions targets.txt streak_config.json time_api_config.json termux:~/tiktok_bot/
+scp -r menu.py menu.sh CHAY_BOT_PHONE.sh chay_ngam.sh tat_bot.sh kiem_tra.sh start_bot.sh hen_gio.py run_local.py run_multi.py sessions targets.txt streak_config.json time_api_config.json termux:~/tiktok_bot/
 if errorlevel 1 (
     echo.
     echo [CANH BAO] Khong the ket noi toi Termux port 8022.
