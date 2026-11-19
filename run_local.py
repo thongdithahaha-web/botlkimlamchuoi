@@ -645,20 +645,27 @@ def load_targets() -> list:
 
 def is_captcha_present(page) -> bool:
     """Kiểm tra toàn diện tất cả các dấu hiệu CAPTCHA (hình ghép, xoay hình, 2 hình giống nhau) trên TikTok."""
+    # 1. Quét nội dung văn bản và class trong DOM chính bằng JavaScript
     try:
-        # 1. Quét nội dung văn bản và class trong DOM bằng JavaScript
         found_js = page.evaluate("""() => {
             const sels = [
                 '#captcha-verify-image', '.captcha_verify_container', '#tiktok-verify-ele',
                 '.sec-cpt-container', '[data-e2e="captcha-verify-container"]',
+                '.captcha-disable-scroll', '.captcha_verify_bar', '.captcha_verify_slide',
                 'div[class*="captcha_verify"]', 'div[class*="sec-cpt"]', 'div[class*="verify-container"]',
-                'div[class*="Captcha"]', 'div[id*="captcha"]'
+                'div[class*="Captcha"]', 'div[class*="verify-wrap"]', 'div[id*="captcha"]', 'div[id*="verify"]'
             ];
             for (const s of sels) {
                 const el = document.querySelector(s);
                 if (el && (el.offsetWidth > 0 || el.offsetHeight > 0 || window.getComputedStyle(el).display !== 'none')) {
                     return true;
                 }
+            }
+            if (document.body && (
+                document.body.classList.contains('captcha-disable-scroll') || 
+                document.body.classList.contains('secsdk-captcha-open')
+            )) {
+                return true;
             }
             const bodyText = document.body ? document.body.innerText : '';
             if (bodyText.includes('Drag the slider') || 
@@ -672,7 +679,7 @@ def is_captcha_present(page) -> bool:
                 bodyText.includes('Verify to continue')) {
                 return true;
             }
-            const iframes = document.querySelectorAll('iframe[src*="captcha"], iframe[src*="verify"], iframe[id*="captcha"]');
+            const iframes = document.querySelectorAll('iframe[src*="captcha"], iframe[src*="verify"], iframe[id*="captcha"], iframe[src*="secsdk"]');
             if (iframes.length > 0) return true;
             return false;
         }""")
@@ -681,7 +688,48 @@ def is_captcha_present(page) -> bool:
     except Exception:
         pass
 
-    # 2. Quét qua Playwright locator dự phòng
+    # 2. Quét xuyên qua tất cả page.frames (xử lý triệt để iframe captcha ByteDance / TikTok)
+    try:
+        for frame in page.frames:
+            f_url = (frame.url or "").lower()
+            if any(k in f_url for k in ["captcha", "verify", "secsdk"]):
+                return True
+            try:
+                f_has_text = frame.evaluate("""() => {
+                    const t = document.body ? document.body.innerText : '';
+                    return t.includes('Drag the slider') || 
+                           t.includes('fit the puzzle') || 
+                           t.includes('puzzle') || 
+                           t.includes('Kéo thanh trượt') || 
+                           t.includes('khớp hình ghép') || 
+                           t.includes('Select 2 objects') || 
+                           t.includes('Chọn 2 đối tượng') || 
+                           t.includes('Verify to continue');
+                }""")
+                if f_has_text:
+                    return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 3. Quét qua Playwright get_by_text (xuyên qua Shadow DOM và iframes)
+    keywords = [
+        "Drag the slider",
+        "fit the puzzle",
+        "Kéo thanh trượt",
+        "khớp hình ghép",
+        "Chọn 2 đối tượng",
+        "Select 2 objects",
+    ]
+    for kw in keywords:
+        try:
+            if page.get_by_text(kw, exact=False).first.is_visible(timeout=100):
+                return True
+        except Exception:
+            pass
+
+    # 4. Quét qua Playwright locator dự phòng
     loc_selectors = [
         "#captcha-verify-image",
         ".captcha_verify_container",
@@ -690,57 +738,69 @@ def is_captcha_present(page) -> bool:
         "[data-e2e='captcha-verify-container']",
         "iframe[src*='captcha']",
         "iframe[src*='verify']",
-        "div:has-text('Drag the slider')",
-        "div:has-text('Kéo thanh trượt')",
+        "iframe[src*='secsdk']",
     ]
     for sel in loc_selectors:
         try:
-            if page.locator(sel).first.is_visible(timeout=150):
+            if page.locator(sel).first.is_visible(timeout=100):
                 return True
         except Exception:
             pass
     return False
 
 
-def detect_and_wait_for_manual_captcha(page, context=None, cookie_file=None, is_headless: bool = False, max_wait: int = 180) -> bool:
-    """Kiểm tra nếu TikTok yêu cầu giải CAPTCHA thì tạm dừng để boss man kéo bằng tay."""
-    # Cho DOM ổn định 0.5s
-    human_sleep(0.4, 0.7)
+def detect_and_wait_for_manual_captcha(page, context=None, cookie_file=None, is_headless: bool = False, max_wait: int = 300, poll_init: float = 3.0) -> bool:
+    """Kiểm tra và tạm dừng hoàn toàn nếu TikTok yêu cầu giải CAPTCHA."""
+    # TikTok thường mất 1-3s sau khi load trang để render bảng CAPTCHA
+    start_poll = time.time()
+    found = False
+    while time.time() - start_poll < poll_init:
+        if is_captcha_present(page):
+            found = True
+            break
+        time.sleep(0.4)
 
-    if not is_captcha_present(page):
+    if not found:
         return False
 
     # Đã phát hiện CAPTCHA!
     print("\a", end="", flush=True)  # Kêu tiếng beep báo động trên PC
-    log.warning("=" * 70)
-    log.warning("[XÁC MINH BẢO MẬT] PHÁT HIỆN TIKTOK ĐANG HIỂN THỊ MÃ CAPTCHA TRÊN MÀN HÌNH!")
+    log.warning("=" * 72)
+    log.warning("  [PHÁT HIỆN CAPTCHA BẢO MẬT] TIKTOK ĐANG HIỂN THỊ MÃ XÁC THỰC!")
+    log.warning("=" * 72)
     if is_headless:
         log.warning(">> Đang chạy ở chế độ ẨN (Headless) nên không thể thao tác kéo chuột.")
         log.warning(">> GIẢI PHÁP:")
         log.warning("   1. Mở file CHAY_BOT_PC.bat -> Chọn [5] -> Chọn [1] (Có cửa sổ trực quan).")
         log.warning("   2. Dùng chuột kéo khớp hình ghép 1 lần duy nhất.")
         log.warning("   3. Phiên sạch (s_v_web_id) sẽ được lưu vĩnh viễn vào session file để chạy ẩn không bao giờ bị hỏi lại.")
-        log.warning("=" * 70)
+        log.warning("=" * 72)
         return False
     else:
         log.info(">> Boss man vui lòng dùng chuột KÉO THANH TRƯỢT / VƯỢT CAPTCHA trên cửa sổ trình duyệt.")
-        log.info(f">> Bot đang TỰ ĐỘNG TẠM DỪNG và chờ boss man thao tác (Tối đa {max_wait} giây)...")
-        log.info(">> (Ngay sau khi boss man kéo xong, bot sẽ tự động nhận diện và tiếp tục chạy)")
-        log.warning("=" * 70)
+        log.info(">> BOT ĐÃ TẠM DỪNG HOÀN TOÀN, TUYỆT ĐỐI KHÔNG CHUYỂN TRANG / KHÔNG ĐỔI MỤC TIÊU.")
+        log.info(f">> (Đang chờ boss man thao tác... tối đa {max_wait} giây)")
+        log.info(">> (Mẹo: Sau khi kéo xong, boss man có thể nhấn phím ENTER tại cửa sổ này,")
+        log.info(">>  hoặc bot sẽ tự động nhận diện trong 2-3 giây để tiếp tục chạy)")
+        log.warning("=" * 72)
 
     start_wait = time.time()
     last_print = 0
     while time.time() - start_wait < max_wait:
-        human_sleep(1.0, 1.5)
+        # 1. Kiểm tra nếu boss man nhấn phím trên console
+        key_pressed = False
+        if sys.platform == "win32":
+            try:
+                import msvcrt
+                if msvcrt.kbhit():
+                    msvcrt.getch()
+                    key_pressed = True
+            except Exception:
+                pass
 
-        # Kiểm tra xem CAPTCHA đã biến mất chưa
-        if not is_captcha_present(page):
-            log.info("=" * 70)
-            log.info("[Thành công] Đã vượt qua CAPTCHA thành công! Tiếp tục tiến trình...")
-            log.info("=" * 70)
-            human_sleep(2.0, 3.0)
-
-            # Cập nhật và lưu ngay cookie sạch đã xác thực vào file
+        if key_pressed:
+            log.info("[Đã xác nhận] Boss man đã nhấn phím báo xong! Đang tiếp tục...")
+            human_sleep(1.5, 2.5)
             if context and cookie_file:
                 try:
                     fresh_cookies = context.cookies()
@@ -751,11 +811,33 @@ def detect_and_wait_for_manual_captcha(page, context=None, cookie_file=None, is_
                     log.warning(f"Không thể lưu cookie: {save_err}")
             return True
 
+        # 2. Tự động kiểm tra xem CAPTCHA đã biến mất hoàn toàn chưa
+        if not is_captcha_present(page):
+            # Chờ thêm 1.5s để chắc chắn không phải giật khung hình
+            time.sleep(1.5)
+            if not is_captcha_present(page):
+                log.info("=" * 72)
+                log.info("[Thành công] Đã xác nhận vượt qua CAPTCHA thành công! Tiếp tục tiến trình...")
+                log.info("=" * 72)
+                human_sleep(2.0, 3.0)
+
+                # Cập nhật và lưu ngay cookie sạch đã xác thực vào file
+                if context and cookie_file:
+                    try:
+                        fresh_cookies = context.cookies()
+                        with open(cookie_file, "w", encoding="utf-8") as f:
+                            json.dump(fresh_cookies, f, indent=2)
+                        log.info(f"[Đã lưu] Đã cập nhật token sạch (s_v_web_id) vào {cookie_file}.")
+                    except Exception as save_err:
+                        log.warning(f"Không thể lưu cookie: {save_err}")
+                return True
+
         elapsed = int(time.time() - start_wait)
         if elapsed - last_print >= 10:
             last_print = elapsed
             rem = max_wait - elapsed
-            log.info(f"   [Đang chờ boss man kéo CAPTCHA...] Đã chờ {elapsed}s (Còn lại {rem}s)")
+            log.info(f"   [Đang chờ boss man kéo CAPTCHA...] Đã chờ {elapsed}s (Còn lại {rem}s | Nhấn Enter nếu đã kéo xong)")
+        time.sleep(0.8)
 
     log.warning(f"[Hết giờ] Đã quá {max_wait} giây chờ xác minh CAPTCHA.")
     return False
@@ -793,6 +875,11 @@ def open_conversation_with_user(page, username: str, context=None, cookie_file=N
     3. (Dự phòng) Truy cập trang cá nhân nếu 2 cách trên không tìm thấy. Bấm nút Tin nhắn an toàn chống crash.
     """
     clean_u = username.strip().lstrip("@")
+
+    # Kiểm tra an toàn: Nếu trang hiện tại đang có CAPTCHA thì tuyệt đối không được chuyển trang
+    if is_captcha_present(page):
+        log.warning(f"[CAPTCHA] Phát hiện CAPTCHA trên màn hình trước khi mở @{clean_u}! Tạm dừng chờ giải...")
+        detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
 
     # Đảm bảo đang ở trang /messages để tận dụng tốc độ cao và tránh bị hỏi CAPTCHA
     if not page.url.startswith("https://www.tiktok.com/messages"):
@@ -948,6 +1035,22 @@ def open_conversation_with_user(page, username: str, context=None, cookie_file=N
             except Exception:
                 pass
 
+        # Nếu chưa tìm thấy nút Tin nhắn, kiểm tra xem có phải do CAPTCHA vừa xuất hiện che mất nút không
+        if not msg_btn:
+            if is_captcha_present(page):
+                log.warning(f"   -> [Cách 3] Phát hiện CAPTCHA che nút Tin nhắn, tạm dừng chờ boss man giải...")
+                solved = detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
+                if solved:
+                    human_sleep(2.0, 3.0)
+                    for sel in profile_msg_button_selectors:
+                        try:
+                            btn_loc = page.locator(sel)
+                            if btn_loc.count() > 0 and btn_loc.first.is_visible(timeout=1500):
+                                msg_btn = btn_loc.first
+                                break
+                        except Exception:
+                            continue
+
         if msg_btn:
             log.info(f"   -> [Cách 3] Đã tìm thấy nút Tin nhắn cho @{clean_u}, đang kích hoạt mở hộp thư...")
             try:
@@ -987,11 +1090,37 @@ def open_conversation_with_user(page, username: str, context=None, cookie_file=N
                 return True
             else:
                 log.warning(f"   -> [Cách 3] Đã bấm nút Tin nhắn nhưng khung chat chưa sẵn sàng.")
+                # Kiểm tra xem có CAPTCHA xuất hiện cản trở không
+                if is_captcha_present(page):
+                    log.warning(f"   -> [Cách 3] CAPTCHA xuất hiện cản trở sau khi bấm Tin nhắn! Tạm dừng để giải...")
+                    solved = detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
+                    if solved:
+                        human_sleep(2.0, 3.0)
+                        if wait_for_chat_editor(page, timeout=6000):
+                            log.info(f"   -> [Cách 3] Đã mở thành công hộp thư với @{clean_u} sau khi vượt CAPTCHA!")
+                            return True
+                        # Nếu vẫn ở trang cá nhân thì click lại nút Tin nhắn
+                        for sel in profile_msg_button_selectors:
+                            try:
+                                btn_loc = page.locator(sel)
+                                if btn_loc.count() > 0 and btn_loc.first.is_visible(timeout=1000):
+                                    btn_loc.first.click(timeout=3000)
+                                    break
+                            except Exception:
+                                continue
+                        if wait_for_chat_editor(page, timeout=8000):
+                            log.info(f"   -> [Cách 3] Đã bấm lại Tin nhắn và mở hộp thư với @{clean_u} thành công!")
+                            return True
         else:
             log.warning(f"   [Cảnh báo] Không tìm thấy nút Tin nhắn trên trang của @{clean_u} (Nick chặn tin nhắn người lạ hoặc chưa kết bạn).")
 
     except Exception as e:
         log.warning(f"   [Lỗi khi mở chat với @{clean_u}]: {e}")
+
+    # Trước khi return False, kiểm tra chắc chắn nếu CAPTCHA đang hiển thị thì phải chờ giải
+    if is_captcha_present(page):
+        log.warning(f"   [Cách 3] Phát hiện CAPTCHA trước khi kết thúc mở @{clean_u}! Tạm dừng...")
+        detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
 
     return False
 
@@ -1065,37 +1194,67 @@ def check_and_send_daily_streaks(page, hub: RemoteHubSync, quota_tracker: UserQu
         log.info(f"[Giữ chuỗi] Đang gửi chuỗi cho bạn bè: @{username}")
         hub.add_log(f"Đang gửi chuỗi lửa cho @{username}")
 
-        try:
-            found = open_conversation_with_user(page, username, context=context, cookie_file=cookie_file, is_headless=is_headless)
-            if found:
-                success = send_chain_messages(page, username, hub)
-                if success:
-                    quota_tracker.record_reply(username, "Giữ chuỗi lúc " + streak_time)
-                    sent_today.append(username)
-                    history[record_key] = sent_today
-                    try:
-                        with open(STREAK_HISTORY_FILE, "w", encoding="utf-8") as f:
-                            json.dump(history, f, indent=2, ensure_ascii=False)
-                    except Exception:
-                        pass
-                    log.info(f"[{session_tag}] Đã thắp lửa chuỗi thành công cho @{username}!")
-                    hub.add_log(f"[{session_tag}] Đã thắp lửa thành công cho @{username}")
-                    human_sleep(1.0, 2.0)
+        user_success = False
+        for attempt in range(1, 4):
+            if not hub.is_running:
+                break
+
+            # Kiểm tra chắc chắn không có CAPTCHA trước khi bắt đầu thử
+            if is_captcha_present(page):
+                detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
+
+            try:
+                found = open_conversation_with_user(page, username, context=context, cookie_file=cookie_file, is_headless=is_headless)
+                if found:
+                    success = send_chain_messages(page, username, hub)
+                    if success:
+                        quota_tracker.record_reply(username, "Giữ chuỗi lúc " + streak_time)
+                        sent_today.append(username)
+                        history[record_key] = sent_today
+                        try:
+                            with open(STREAK_HISTORY_FILE, "w", encoding="utf-8") as f:
+                                json.dump(history, f, indent=2, ensure_ascii=False)
+                        except Exception:
+                            pass
+                        log.info(f"[{session_tag}] Đã thắp lửa chuỗi thành công cho @{username}!")
+                        hub.add_log(f"[{session_tag}] Đã thắp lửa thành công cho @{username}")
+                        human_sleep(1.0, 2.0)
+                        user_success = True
+                        break
+                    else:
+                        log.warning(f"[{session_tag}] Không thể gửi trọn vẹn chuỗi tin cho @{username}")
                 else:
-                    log.warning(f"[{session_tag}] Không thể gửi trọn vẹn chuỗi tin cho @{username}")
-            else:
-                log.warning(f"[{session_tag}] Bỏ qua @{username} do không mở được hộp thư, tiếp tục tài khoản kế tiếp...")
-        except Exception as e_user:
-            log.error(f"[{session_tag}] Lỗi khi xử lý bạn bè @{username}: {e_user}")
-            human_sleep(1.0, 2.0)
+                    # Nếu mở thất bại, kiểm tra ngay có CAPTCHA xuất hiện không
+                    if is_captcha_present(page):
+                        log.warning(f"[{session_tag}] Phát hiện CAPTCHA đang chặn mở hộp thư @{username}! Tạm dừng chờ boss man kéo...")
+                        solved = detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
+                        if solved:
+                            log.info(f"[{session_tag}] Giải CAPTCHA thành công! Thử lại ngay với @{username} (không chuyển nick)...")
+                            human_sleep(1.5, 2.5)
+                            continue
+                    log.warning(f"[{session_tag}] Mở hộp thư @{username} chưa thành công (Lần {attempt}/3)...")
+            except Exception as e_user:
+                log.error(f"[{session_tag}] Lỗi khi xử lý bạn bè @{username}: {e_user}")
+                if is_captcha_present(page):
+                    detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
+                human_sleep(1.0, 2.0)
+
+            if not user_success and attempt < 3:
+                human_sleep(1.5, 2.5)
+
+        if not user_success:
+            # KHÓA AN TOÀN TUYỆT ĐỐI: Không bao giờ chuyển nick nếu CAPTCHA vẫn đang hiển thị
+            while is_captcha_present(page):
+                log.warning(f"[{session_tag}] CAPTCHA vẫn đang hiển thị trên màn hình! KHÔNG CHUYỂN MỤC TIÊU!")
+                solved = detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
+                if not solved:
+                    break
+            log.warning(f"[{session_tag}] Bỏ qua @{username} sau 3 lần thử, tiếp tục tài khoản kế tiếp...")
 
     # Đưa lại về trang tin nhắn chính sau khi hoàn thành
+    if is_captcha_present(page):
+        detect_and_wait_for_manual_captcha(page, context, cookie_file=cookie_file, is_headless=is_headless)
     if not page.url.startswith("https://www.tiktok.com/messages"):
-        try:
-            page.goto("https://www.tiktok.com/messages", timeout=30000)
-            page.wait_for_timeout(2000)
-        except Exception:
-            pass
         try:
             page.goto("https://www.tiktok.com/messages", timeout=30000)
             human_sleep(1.5, 2.5)
